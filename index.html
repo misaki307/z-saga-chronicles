@@ -84,9 +84,17 @@
             <br>HP: <span id="ui-hp">100</span> | <span style="color:#f1c40f;">所持金: <span id="ui-gold">0</span> G</span>
           </div>
           <div class="menu-btn-container">
+            <button id="btn-field-travel" class="retro-btn small-btn">🗺️ 移動 [F]</button>
             <button id="btn-open-shop-direct" class="retro-btn small-btn">🔮 召喚 [G]</button>
             <button id="btn-open-menu" class="retro-btn small-btn">Menu [M]</button>
           </div>
+        </div>
+
+        <!-- フィールド拡張: 移動先選択パネル -->
+        <div id="field-travel-panel" class="dialog panel-16bit hidden" style="top:80px; bottom:auto; height:auto; max-height:60%; overflow-y:auto; z-index:60;">
+          <h3 style="margin-bottom:10px;">🗺️ 移動先を選ぶ</h3>
+          <ul id="field-travel-list" style="list-style:none; text-align:left;"></ul>
+          <button id="btn-field-travel-close" class="retro-btn small-btn" style="margin-top:10px;">閉じる</button>
         </div>
 
         <div class="social-feed">
@@ -144,6 +152,10 @@
             <hr>
             <h3>【仲間になった魔物＆召喚した魂】</h3>
             <ul id="party-list"></ul>
+            <hr>
+            <h3>🧵 仕立工房</h3>
+            <p style="font-size:13px; color:#d9ccff;">Gで仲間を1レベル上げられます（費用は現在Lvにより変動）</p>
+            <ul id="tailor-list"></ul>
           </div>
           <button id="btn-close-menu" class="retro-btn">閉じる [Esc]</button>
         </div>
@@ -208,6 +220,8 @@
   <script src="background.js"></script>
   <!-- スプライトエンジン: 外部PNGスプライトシートの読込・アニメーション制御 -->
   <script src="sprites.js"></script>
+  <!-- フィールド拡張: 3ステージの設定値・敵倍率・背景アニメーション・BGM切替フック(データのみ) -->
+  <script src="field-expansion.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

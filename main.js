@@ -33,7 +33,12 @@ musicBus.knee.setValueAtTime(18, audioCtx.currentTime);
 musicBus.ratio.setValueAtTime(4, audioCtx.currentTime);
 musicBus.attack.setValueAtTime(0.003, audioCtx.currentTime);
 musicBus.release.setValueAtTime(0.15, audioCtx.currentTime);
-musicBus.connect(audioCtx.destination);
+// フィールド拡張: フィールド移動時のクロスフェード専用ゲイン。通常は1のまま、
+// 移動時だけ600msでフェードアウト→フェードインする(戦闘/召喚SEには影響しない)。
+const fieldMusicGain = audioCtx.createGain();
+fieldMusicGain.gain.setValueAtTime(1, audioCtx.currentTime);
+musicBus.connect(fieldMusicGain);
+fieldMusicGain.connect(audioCtx.destination);
 
 function synthVoice(freq, opts) {
     opts = opts || {};
@@ -195,9 +200,18 @@ function playSound(type) {
 
 let bgmInterval = null;
 
-// フィールドBGM（オリジナル）: D dorian。前半8ステップは静か(笛のみ)、
-// 後半8ステップは金管+弦+ベースで盛り上がる「静と動」を1周期で繰り返す。
+// フィールドBGM（オリジナル）: 現在地(GameState.currentFieldId)に応じて3曲を出し分ける。
+// アズライト大陸=既存の草原テーマ(変更なし)、闇の森・洗濯槽深層は新規テーマ。
 function playFieldBGM() {
+    const fieldId = GameState.currentFieldId || 'azurlight';
+    if (fieldId === 'wardrobe_gloomwood') playWardrobeFieldBGM();
+    else if (fieldId === 'laundry_abyss') playLaundryFieldBGM();
+    else playMeadowFieldBGM();
+}
+
+// アズライト大陸: D dorian。前半8ステップは静か(笛のみ)、
+// 後半8ステップは金管+弦+ベースで盛り上がる「静と動」を1周期で繰り返す。(既存テーマ、変更なし)
+function playMeadowFieldBGM() {
     const stepMs = 260;
     const stepDur = stepMs / 1000;
     const quietMelody = [440, 0, 587.33, 0, 523.25, 0, 440, 0]; // A4 . D5 . C5 . A4 .
@@ -217,6 +231,35 @@ function playFieldBGM() {
             synthVoice(climaxBass[i], { type: 'triangle', dur: stepDur * 1.05, gain: 0.13, attack: 0.01 });
         }
     }, 16);
+}
+
+// 闇の森・クローゼット深部（オリジナル）: 短調・低いドローン・木を叩くようなノック音・ボタンのようなベル。
+// 静かで不穏。74BPM相当のゆっくりしたテンポ。
+function playWardrobeFieldBGM() {
+    const stepMs = 400;
+    const stepDur = stepMs / 1000;
+    const melody = [0, 0, 293.66, 0, 0, 349.23, 0, 0]; // D4 . . F4 . . （休符主体の不穏な旋律）
+    startSequencer(stepMs, (step) => {
+        if (step === 0) synthChoir(146.83, stepDur * 8, 0.045, 0); // D3 ドローン
+        const mel = melody[step];
+        if (mel) synthBell(mel, 1.2, 0.07, 0); // ボタンが鳴るようなベル
+        if (step % 2 === 0) synthVoice(80, { type: 'square', dur: 0.05, gain: 0.07, attack: 0.001, filterHz: 250 }); // 木を叩くようなノック音
+    }, 8);
+}
+
+// 洗濯槽深層・ランドリーアビス（オリジナル）: 浮遊感のある三角波、水滴のような高音、揺れる低音。
+// 92BPM相当。
+function playLaundryFieldBGM() {
+    const stepMs = 300;
+    const stepDur = stepMs / 1000;
+    const bassNotes = [130.81, 146.83, 130.81, 116.54]; // C3 D3 C3 Bb2（ゆったり揺れる低音）
+    const dropNotes = [0, 1567.98, 0, 0, 1864.66, 0, 0, 1318.51]; // 水滴のような高音、疎らに
+    startSequencer(stepMs, (step) => {
+        if (step === 0) synthChoir(261.63, stepDur * 8, 0.04, 0);
+        if (step % 4 === 0) synthVoice(bassNotes[(step / 4) % bassNotes.length], { type: 'triangle', dur: stepDur * 4.2, gain: 0.09, attack: 0.3, filterHz: 500 });
+        const drop = dropNotes[step % dropNotes.length];
+        if (drop) synthVoice(drop, { type: 'sine', dur: 0.5, gain: 0.06, attack: 0.005 });
+    }, 8);
 }
 
 // 戦闘BGM（オリジナル）: intensity='normal'(通常)/'a'(Aランク=厚み追加)/'boss'(Sランク=最も壮大)
@@ -282,6 +325,27 @@ function playFastEpicBGM(isBattle = false) {
 }
 function stopBGM() { if (bgmInterval) { clearInterval(bgmInterval); bgmInterval = null; } }
 
+// フィールド拡張: field-expansion.jsのswitchFieldMusicが呼ぶブリッジ。
+// bgmIntervalは常に1系統しか持たないため二重再生はしない。600msでfieldMusicGainを
+// フェードアウト→(曲を差し替え)→フェードインし、視覚的な"クロスフェード"を再現する。
+const audioBridge = {
+    currentFieldMusicId: null,
+    crossfadeTo(musicConfig, ms) {
+        const fadeSec = (ms || 600) / 1000;
+        const now = audioCtx.currentTime;
+        fieldMusicGain.gain.cancelScheduledValues(now);
+        fieldMusicGain.gain.setValueAtTime(fieldMusicGain.gain.value, now);
+        fieldMusicGain.gain.linearRampToValueAtTime(0.0001, now + fadeSec);
+        setTimeout(() => {
+            playFastEpicBGM(false); // GameState.currentFieldIdを見て正しいフィールド曲を1系統だけ再生する
+            const now2 = audioCtx.currentTime;
+            fieldMusicGain.gain.cancelScheduledValues(now2);
+            fieldMusicGain.gain.setValueAtTime(0.0001, now2);
+            fieldMusicGain.gain.linearRampToValueAtTime(1, now2 + fadeSec);
+        }, ms || 600);
+    }
+};
+
 // 召喚中: レア度が上がるほど音数が増え、テンポが速く、音色が豪華になるオリジナルBGM
 // ※ tempo(=長さ・溜めの周期)とnotes(主旋律)は既存の演出タイミングに合わせて一切変更しない。
 //    bass/harmony/bellは追加の重ね声のみで、B/Aランクは従来どおり単声のまま。
@@ -327,9 +391,45 @@ const GameState = {
     listing: null, // {id, itemName, status:'listed'|'reviewed'|'completed', rewardClaimed}
     continents: ['封印の塔', 'カジュアル平原', '深淵の森', '荒野の砂漠', '古の山脈', 'アズライト中央大陸'],
     globalTime: 0,
-    gold: 0
+    gold: 0,
+    // フィールド拡張: 現在地と、ボス撃破/討伐数などのワールド進行(localStorageへ保存)
+    currentFieldId: 'azurlight',
+    worldProgress: { defeatedBosses: {}, killCounts: {} }
 };
 let currentTrend = 'なし';
+
+// ==========================================
+// フィールド拡張: ワールド進行の永続化(localStorage)
+// ==========================================
+const WORLD_PROGRESS_KEY = 'zsaga_world_progress_v1';
+function saveWorldProgress() {
+    try { localStorage.setItem(WORLD_PROGRESS_KEY, JSON.stringify(GameState.worldProgress)); } catch (e) { /* 保存できない環境では無視 */ }
+}
+function loadWorldProgress() {
+    try {
+        const raw = localStorage.getItem(WORLD_PROGRESS_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+            GameState.worldProgress.defeatedBosses = parsed.defeatedBosses || {};
+            GameState.worldProgress.killCounts = parsed.killCounts || {};
+        }
+    } catch (e) { /* 壊れた保存データは無視して初期状態を使う */ }
+}
+loadWorldProgress();
+
+// フィールド背景画像の先読み(SPRITE_MANIFESTと同様、パス・並び順はfield-expansion.jsのものをそのまま使う)
+const FIELD_BG_IMAGES = {};
+(function preloadFieldBackgrounds() {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    if (!fx) return;
+    Object.keys(fx.fields).forEach(id => {
+        const img = new Image();
+        img.onerror = () => console.warn(`[field-expansion] 背景画像の読込に失敗: ${fx.fields[id].background}`);
+        img.src = fx.fields[id].background;
+        FIELD_BG_IMAGES[id] = img;
+    });
+})();
 
 function updateGold(amount) {
     GameState.gold += amount;
@@ -443,7 +543,9 @@ function addOrEnhancePartyMember(candidate) {
 function getAllyDamageMultiplier(ally) {
     const atkBonus = (ally.atkBonusPct || 0) / 100;
     const skillBonus = ((ally.skillLevel || 1) - 1) * 0.05;
-    return 1 + atkBonus + skillBonus;
+    // 仕立工房のLv(重複強化と同じ ally.level を共有)も攻撃力へ反映する
+    const levelBonus = ((ally.level || 1) - 1) * 0.08;
+    return 1 + atkBonus + skillBonus + levelBonus;
 }
 
 const ALL_GACHA_RANK_CLASSES = ['summon-rank-b','summon-rank-a','summon-rank-s','summon-rank-ss','summon-rank-sss'];
@@ -488,7 +590,11 @@ function generateEnemy(style) {
     const base = ENEMY_TYPES[tier][Math.floor(Math.random() * ENEMY_TYPES[tier].length)];
     const cfg = ENEMY_TIER_CONFIG[tier];
     const enemyStyle = style || ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)];
-    const hp = randInt(cfg.hpMin, cfg.hpMax);
+    // フィールド拡張: ステージごとの敵HP/獲得G倍率(設定がなければ×1のまま)
+    const fieldCfg = window.ZSAGA_FIELD_EXPANSION && window.ZSAGA_FIELD_EXPANSION.fields[GameState.currentFieldId];
+    const hpMult = fieldCfg ? fieldCfg.enemyHpMultiplier : 1;
+    const goldMult = fieldCfg ? fieldCfg.goldMultiplier : 1;
+    const hp = Math.round(randInt(cfg.hpMin, cfg.hpMax) * hpMult);
     return {
         name: `${enemyStyle}の${base.name}`,
         enemyTypeKey: base.key, tier, rankLabel: cfg.rankLabel,
@@ -496,7 +602,7 @@ function generateEnemy(style) {
         job: '魔物', style: enemyStyle,
         moveSpeed: base.moveSpeed, attackRange: base.attackRange,
         originItem: GameState.avatar.name || '伝説の遺物',
-        hp: hp, maxHp: hp, goldDrop: base.goldDrop,
+        hp: hp, maxHp: hp, goldDrop: Math.round(base.goldDrop * goldMult),
         // 通常攻撃耐性・突破バリア(A/Sのみ)。スキルまたは属性一致連携でのみ突破できる。
         normalResist: cfg.normalResist,
         barrierThresholdPct: cfg.barrierThresholdPct,
@@ -543,6 +649,9 @@ const player = { x: 400, y: 300, vx: 0, vy: 0, speed: 5 }; const keys = {}; cons
 const GRASS_ZONES = [{ x: 220, y: 170, w: 100, h: 60 }, { x: 500, y: 200, w: 80, h: 100 }, { x: 350, y: 300, w: 80, h: 120 }, { x: 450, y: 470, w: 120, h: 50 }];
 const SHOP_DOOR = { x: 550, y: 140, w: 20, h: 20 };
 const SHOP_TRIGGER_ZONE = { x: SHOP_DOOR.x + 10 - 30, y: SHOP_DOOR.y + 10 - 40, w: 60, h: 80 };
+// フィールド拡張: 背景上部に配置するボスゲート(未解放時は「あと○体」表示、達成後は接触でボス戦)
+const BOSS_GATE_ZONE = { x: 370, y: 25, w: 60, h: 50 };
+let bossGateMsgCooldown = 0;
 
 function rectsOverlap(a, b) {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
@@ -575,13 +684,53 @@ function checkTriggers() {
         ? GameState.avatar.sprite.getFeetHitbox(player.x, player.y)
         : { x: player.x - 5, y: player.y - 3, w: 10, h: 6 };
 
-    let onGrass = false;
-    for (let z of GRASS_ZONES) if (rectsOverlap(feet, z)) onGrass = true;
-    if (onGrass && Math.random() < 0.0105) startEncounter();
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const field = fx && fx.fields[GameState.currentFieldId];
+
+    let onGrass;
+    let encounterMult = 1;
+    if (field) {
+        // フィールド拡張の3背景は通路のない全面自由歩行地帯のため、フィールド全体をエンカウント対象にする
+        onGrass = true;
+        encounterMult = field.encounterMultiplier || 1;
+    } else {
+        onGrass = false;
+        for (let z of GRASS_ZONES) if (rectsOverlap(feet, z)) onGrass = true;
+    }
+    if (onGrass && Math.random() < 0.0105 * encounterMult) startEncounter();
 
     if (rectsOverlap(feet, SHOP_TRIGGER_ZONE)) {
         if ((keys['ArrowUp'] || keys['w']) && !isShopOpen) openShop();
     }
+
+    if (bossGateMsgCooldown > 0) bossGateMsgCooldown--;
+    if (field && rectsOverlap(feet, BOSS_GATE_ZONE) && (keys['ArrowUp'] || keys['w'])) {
+        checkBossGateTrigger(field);
+    }
+}
+
+// フィールド拡張: ボスゲートへの接触判定。討伐数未達なら残り体数を表示し、達成済みならボス戦へ入る。
+function checkBossGateTrigger(field) {
+    if (isBattling || isMenuOpen || isShopOpen || isFashionShow) return;
+    if (GameState.worldProgress.defeatedBosses[field.id]) {
+        if (bossGateMsgCooldown <= 0) { showTransientFieldMessage(`✨ ${field.name}の守護者は既に眠りについている`); bossGateMsgCooldown = 90; }
+        return;
+    }
+    const kills = GameState.worldProgress.killCounts[field.id] || 0;
+    if (kills < field.killsToOpenBoss) {
+        if (bossGateMsgCooldown <= 0) { showTransientFieldMessage(`あと${field.killsToOpenBoss - kills}体倒すとボスの気配が強まる`); bossGateMsgCooldown = 90; }
+        return;
+    }
+    startFieldBossEncounter(field.id);
+}
+
+// フィールド拡張: 探索中メッセージ欄へ一時的な短文を表示する(数秒後に元へ戻す)
+function showTransientFieldMessage(msg, ms) {
+    const dialogText = document.getElementById('dialog-text');
+    if (!dialogText) return;
+    const prev = dialogText.textContent;
+    dialogText.textContent = msg;
+    setTimeout(() => { if (dialogText.textContent === msg) dialogText.textContent = prev; }, ms || 2500);
 }
 
 // 伝説1: Trend Tailwind Logic
@@ -652,6 +801,37 @@ function updateLunge() {
     else if (attackLungeDir < 0 && attackLungeT > 0) attackLungeT = Math.max(0, attackLungeT - speed);
 }
 
+// フィールド拡張: 現在地の背景を描く。画像が未読込の間は既存のdrawMap(草原)へフォールバックする。
+// field-expansion.jsのdrawAnimatedFieldをそのまま使い、8px刻みのアニメーションを含めて委譲する。
+function drawFieldBackground(ctxObj) {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const fieldId = GameState.currentFieldId;
+    const img = FIELD_BG_IMAGES[fieldId];
+    if (fx && img && img.complete && img.naturalWidth > 0) {
+        fx.drawAnimatedField(ctxObj, img, fieldId, GameState.globalTime);
+    } else {
+        drawMap(ctxObj, GameState.globalTime);
+    }
+}
+
+// フィールド拡張: 背景上部のボスゲート表示。未達成は薄く静かに、達成後は金色に強く光らせる。
+function drawBossGateIndicator(ctxObj) {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const field = fx && fx.fields[GameState.currentFieldId];
+    if (!field) return;
+    if (GameState.worldProgress.defeatedBosses[field.id]) return; // 撃破済みのフィールドはゲート表示不要
+    const kills = GameState.worldProgress.killCounts[field.id] || 0;
+    const ready = kills >= field.killsToOpenBoss;
+    const pulse = 8 + Math.sin(GameState.globalTime * (ready ? 0.15 : 0.05)) * 4;
+    ctxObj.save();
+    ctxObj.strokeStyle = ready ? 'rgba(255,215,80,0.9)' : 'rgba(170,170,200,0.45)';
+    ctxObj.lineWidth = 3;
+    ctxObj.strokeRect(BOSS_GATE_ZONE.x - pulse / 2, BOSS_GATE_ZONE.y - pulse / 2, BOSS_GATE_ZONE.w + pulse, BOSS_GATE_ZONE.h + pulse);
+    ctxObj.fillStyle = ready ? 'rgba(255,215,80,0.22)' : 'rgba(170,170,200,0.10)';
+    ctxObj.fillRect(BOSS_GATE_ZONE.x, BOSS_GATE_ZONE.y, BOSS_GATE_ZONE.w, BOSS_GATE_ZONE.h);
+    ctxObj.restore();
+}
+
 // 横視点の戦闘背景（フィールドマップとは別の専用ステージ）
 function drawBattleArena(ctxObj) {
     const skyGrad = ctxObj.createLinearGradient(0, 0, 0, 340);
@@ -692,7 +872,11 @@ function drawGame() {
     ctx.save();
     if (screenShakeTimer > 0) ctx.translate((Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (isBattling) drawBattleArena(ctx); else drawMap(ctx, GameState.globalTime);
+    if (isBattling) {
+        drawBattleArena(ctx);
+    } else {
+        drawFieldBackground(ctx);
+    }
 
     let hasTrendBuff = (GameState.avatar.style === currentTrend);
     let hx = player.x, hy = player.y;
@@ -703,6 +887,7 @@ function drawGame() {
             const pos = historyLog[delay] || historyLog[historyLog.length - 1] || player;
             drawFollowerSprite(follower, pos.x, pos.y, 0.9);
         });
+        drawBossGateIndicator(ctx);
     } else if (isBattling && currentEnemy) {
         GameState.party.forEach((follower, i) => {
             let px = 100 - (Math.floor(i / 3) * 30), py = 300 + ((i % 3) * 60);
@@ -781,20 +966,113 @@ function toggleMenu() {
             }
             list.appendChild(li);
         });
+        renderTailorWorkshop();
     } else { b.classList.add('hidden'); }
 }
 document.getElementById('btn-open-menu').addEventListener('click', toggleMenu); document.getElementById('btn-close-menu').addEventListener('click', toggleMenu);
+
+// ==========================================
+// フィールド拡張: 仕立工房（Gで仲間を1レベル上げる。重複強化のLvと同じ数値を共有する）
+// ==========================================
+function renderTailorWorkshop() {
+    const list = document.getElementById('tailor-list');
+    if (!list) return;
+    list.innerHTML = '';
+    if (GameState.party.length === 0) { list.innerHTML = '<li>まだ仲間がいません。</li>'; return; }
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    GameState.party.forEach(ally => {
+        const level = ally.level || 1;
+        const cost = fx ? fx.levelUpCost(level) : (120 + level * 100);
+        const li = document.createElement('li');
+        li.style.display = 'flex'; li.style.justifyContent = 'space-between'; li.style.alignItems = 'center'; li.style.margin = '5px 0';
+        const label = document.createElement('span');
+        label.textContent = `${ally.name} Lv.${level}`;
+        const btn = document.createElement('button');
+        btn.className = 'retro-btn small-btn';
+        btn.textContent = `▶ Lvアップ (${cost}G)`;
+        btn.disabled = GameState.gold < cost;
+        btn.addEventListener('click', () => levelUpAllyWithGold(ally));
+        li.appendChild(label); li.appendChild(btn);
+        list.appendChild(li);
+    });
+}
+
+function levelUpAllyWithGold(ally) {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const level = ally.level || 1;
+    const cost = fx ? fx.levelUpCost(level) : (120 + level * 100);
+    if (GameState.gold < cost) { playSound('hit'); return; }
+    updateGold(-cost);
+    ally.level = level + 1;
+    playSound('fanfare');
+    renderTailorWorkshop();
+}
 
 function openShopDirect() {
     if (isBattling || isMenuOpen || isShopOpen || isFashionShow) return;
     openShop();
 }
+
+// ==========================================
+// フィールド拡張: 3ステージ間の移動
+// ==========================================
+function updateFieldDialogText() {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const field = fx && fx.fields[GameState.currentFieldId];
+    const dialogText = document.getElementById('dialog-text');
+    if (dialogText && field) dialogText.textContent = `${field.name}を探索中...`;
+}
+
+function changeField(nextFieldId) {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    if (!fx) return;
+    const field = fx.fields[nextFieldId];
+    if (!field) return;
+    const unlocked = !field.unlockAfter || GameState.worldProgress.defeatedBosses[field.unlockAfter];
+    if (!unlocked) return;
+
+    GameState.currentFieldId = nextFieldId; // 背景はdrawGame()がcurrentFieldIdを見て次フレームから自動的に切り替わる
+    player.x = 400; player.y = 500; historyLog.length = 0;
+    updateFieldDialogText();
+    fx.switchFieldMusic(nextFieldId, audioBridge); // 背景更新の直後に必ず1回だけ呼ぶ
+}
+
+function openFieldTravel() {
+    if (isBattling || isMenuOpen || isShopOpen || isFashionShow) return;
+    playSound('select');
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const list = document.getElementById('field-travel-list');
+    if (!fx || !list) return;
+    list.innerHTML = '';
+    fx.fieldOrder.forEach(id => {
+        const field = fx.fields[id];
+        const unlocked = !field.unlockAfter || GameState.worldProgress.defeatedBosses[field.unlockAfter];
+        const li = document.createElement('li');
+        li.style.margin = '6px 0';
+        if (unlocked) {
+            const btn = document.createElement('button');
+            btn.className = 'retro-btn cmd-btn';
+            btn.textContent = (id === GameState.currentFieldId ? '📍 ' : '▶ ') + field.name;
+            btn.disabled = (id === GameState.currentFieldId);
+            btn.addEventListener('click', () => { changeField(id); closeFieldTravel(); });
+            li.appendChild(btn);
+        } else {
+            li.innerHTML = `<span style="opacity:.5; padding:8px; display:inline-block;">🔒 ${field.name}（未解放）</span>`;
+        }
+        list.appendChild(li);
+    });
+    document.getElementById('field-travel-panel').classList.remove('hidden');
+}
+function closeFieldTravel() { document.getElementById('field-travel-panel').classList.add('hidden'); }
+document.getElementById('btn-field-travel').addEventListener('click', openFieldTravel);
+document.getElementById('btn-field-travel-close').addEventListener('click', closeFieldTravel);
 document.getElementById('btn-open-shop-direct').addEventListener('click', openShopDirect);
 
 window.addEventListener('keydown', e => {
     if (!isMenuOpen && !isShopOpen && !isFashionShow) keys[e.key] = true;
     if ((e.key === 'm' || e.key === 'M') && !isShopOpen) toggleMenu();
     if (e.key === 'g' || e.key === 'G') openShopDirect();
+    if (e.key === 'f' || e.key === 'F') openFieldTravel();
     if (e.key === 'Escape' && isMenuOpen) toggleMenu();
 }); window.addEventListener('keyup', e => { keys[e.key] = false; });
 
@@ -810,6 +1088,9 @@ document.getElementById('clothing-upload').addEventListener('change', async (e) 
 function startGame() {
     playSound('select');
     document.getElementById('ritual-screen').classList.replace('active', 'hidden'); document.getElementById('game-screen').classList.replace('hidden', 'active');
+    GameState.currentFieldId = 'azurlight'; // 新しい旅は常にアズライト大陸から(未解放フィールドはメニューから移動できる)
+    audioBridge.currentFieldMusicId = 'field-meadow';
+    updateFieldDialogText();
     playFastEpicBGM(false); player.x = 190; player.y = 190; historyLog.length = 0; GameState.party = []; updateGold(0);
     GameState.avatar.sprite = new SpriteAnimator('hero', GameState.avatar.job);
     currentTrend = ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)]; // Init trend
@@ -1039,7 +1320,10 @@ function enemyCounterAttack(onDone) {
     // 中型/ボスは専用技として通常反撃より強いダメージを出すことがある
     const isSpecial = (currentEnemy.tier === 'mid' || currentEnemy.tier === 'boss') && Math.random() < 0.4;
     const tierMulti = currentEnemy.tier === 'boss' ? 2.0 : (currentEnemy.tier === 'mid' ? 1.4 : 1.0);
-    const dmg = Math.max(1, Math.round(randInt(15, 30) * tierMulti * (isSpecial ? 1.6 : 1)));
+    // フィールド拡張: ステージごとの敵攻撃倍率(設定がなければ×1のまま)
+    const fieldCfg = window.ZSAGA_FIELD_EXPANSION && window.ZSAGA_FIELD_EXPANSION.fields[GameState.currentFieldId];
+    const fieldAtkMult = fieldCfg ? fieldCfg.enemyAttackMultiplier : 1;
+    const dmg = Math.max(1, Math.round(randInt(15, 30) * tierMulti * fieldAtkMult * (isSpecial ? 1.6 : 1)));
 
     GameState.avatar.hp = Math.max(1, GameState.avatar.hp - dmg);
     updateHeroHUD();
@@ -1066,6 +1350,45 @@ function startEncounter() {
         if (GameState.avatar.sprite) { GameState.avatar.sprite.dir = DIR.RIGHT; GameState.avatar.sprite.setAction('idle'); }
         GameState.party.forEach(p => { if (p.sprite) { p.sprite.dir = DIR.RIGHT; p.sprite.setAction('idle'); } });
         bName.textContent = `⚠️ 【${currentEnemy.name}】[${currentEnemy.rankLabel}ランク] が現れた！`; bMsg.textContent = `「その力、まだ我には及ばぬな…」`;
+        bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden'); playFastEpicBGM(true);
+    }, 1200);
+}
+
+// フィールド拡張: フィールド固有ボス(百着を呑む呪衣装棚 / 無限袖のクローゼットロード / 大渦布竜スピン・レヴィアタン)を
+// 通常のcurrentEnemy形状で組み立てる。既存のボス障壁(cfg=ENEMY_TIER_CONFIG.boss)をそのまま使い、
+// 新しいバリア数式は追加しない。専用スプライトが無い2体は既存のボス級スプライト(dragon)を代用する。
+const FIELD_BOSS_SPRITE_KEY = { treeent: 'treeent', wardrobe_lord: 'dragon', spin_leviathan: 'dragon' };
+function buildFieldBoss(fieldId) {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const field = fx.fields[fieldId];
+    const b = field.boss;
+    const cfg = ENEMY_TIER_CONFIG.boss; // 既存の耐性・障壁閾値をそのまま流用する
+    const spriteKey = FIELD_BOSS_SPRITE_KEY[b.key] || 'treeent';
+    return {
+        name: b.name, enemyTypeKey: spriteKey, tier: 'boss', rankLabel: b.rank,
+        isDragon: true, job: '魔物', style: ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)],
+        moveSpeed: 1.0, attackRange: 90,
+        originItem: GameState.avatar.name || '伝説の遺物',
+        hp: b.hp, maxHp: b.hp, goldDrop: b.gold,
+        normalResist: cfg.normalResist, barrierThresholdPct: cfg.barrierThresholdPct,
+        barrierActive: false, barrierBroken: false,
+        isFieldBoss: true, fieldId: fieldId,
+        sprite: new SpriteAnimator('enemy', spriteKey)
+    };
+}
+
+function startFieldBossEncounter(fieldId) {
+    if (isMenuOpen || isShopOpen || isFashionShow || isBattling) return;
+    isBattling = true; keys['ArrowUp'] = keys['ArrowDown'] = keys['ArrowLeft'] = keys['ArrowRight'] = false;
+    stopBGM(); playSound('noise'); document.getElementById('game-screen').classList.add('screen-shake'); document.getElementById('encounter-effect').classList.remove('hidden');
+    attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0;
+    setTimeout(() => {
+        document.getElementById('game-screen').classList.remove('screen-shake'); document.getElementById('encounter-effect').classList.add('hidden');
+        currentEnemy = buildFieldBoss(fieldId); battleViewState = 'idle'; updateHPUI(); updateHeroHUD();
+        if (GameState.avatar.sprite) { GameState.avatar.sprite.dir = DIR.RIGHT; GameState.avatar.sprite.setAction('idle'); }
+        GameState.party.forEach(p => { if (p.sprite) { p.sprite.dir = DIR.RIGHT; p.sprite.setAction('idle'); } });
+        bName.textContent = `⚠️ 【${currentEnemy.name}】[${currentEnemy.rankLabel}ランク] が現れた！`;
+        bMsg.textContent = `フィールドの守護者が立ちはだかる…`;
         bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden'); playFastEpicBGM(true);
     }, 1200);
 }
@@ -1308,6 +1631,13 @@ function triggerCirculation() {
     spawnParticles(600, 380);
     const reward = currentEnemy.goldDrop || 50; updateGold(reward);
 
+    // フィールド拡張: フィールド固有ボス以外の撃破だけをボスゲート討伐数に加算する
+    if (currentEnemy && !currentEnemy.isFieldBoss) {
+        const fid = GameState.currentFieldId;
+        GameState.worldProgress.killCounts[fid] = (GameState.worldProgress.killCounts[fid] || 0) + 1;
+        saveWorldProgress();
+    }
+
     setTimeout(() => { bMsg.textContent = `敵の魂がGへと変換された！ (獲得: ${reward} G)`; playSound('crystal'); }, 1500);
 
     setTimeout(() => {
@@ -1381,11 +1711,22 @@ function drawFashionShow() {
         isFashionShow = false; document.getElementById('fashion-show-screen').classList.add('hidden');
         const bonus = Math.round((fsBoss.goldDrop || 150) * 0.8);
         updateGold(bonus);
+
+        // フィールド拡張: フィールド固有ボスなら撃破フラグを保存し、次のフィールドを解放する
+        let unlockMsg = null;
+        if (fsBoss.isFieldBoss) {
+            GameState.worldProgress.defeatedBosses[fsBoss.fieldId] = true;
+            saveWorldProgress();
+            const fx = window.ZSAGA_FIELD_EXPANSION;
+            const nextField = fx && Object.values(fx.fields).find(f => f.unlockAfter === fsBoss.fieldId);
+            if (nextField) unlockMsg = `✨ ${nextField.name} が解放された！ (+${bonus} G)`;
+        }
+
         const dialogText = document.getElementById('dialog-text');
         if (dialogText) {
             const prevText = dialogText.textContent;
-            dialogText.textContent = `💰 凱旋の儀が終わり、ボスの魂がGに変換された！ (+${bonus} G)`;
-            setTimeout(() => { dialogText.textContent = prevText; }, 3000);
+            dialogText.textContent = unlockMsg || `💰 凱旋の儀が終わり、ボスの魂がGに変換された！ (+${bonus} G)`;
+            setTimeout(() => { dialogText.textContent = prevText; }, 4000);
         }
         currentEnemy = null; isBattling = false; battleViewState = 'idle';
         playFastEpicBGM(false);
