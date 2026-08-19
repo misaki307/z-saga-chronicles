@@ -21,6 +21,91 @@
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 const audioCtx = new AudioContext();
 
+// ==========================================
+// BGM専用シンセ音源ヘルパー
+// 既存のSFX(playSound内の各case)には一切触れず、
+// フィールド/戦闘/召喚BGMと勝利ファンファーレだけで使用する。
+// 複数ボイスが重なってもクリップしないよう、専用バスにコンプレッサーを挟む。
+// ==========================================
+const musicBus = audioCtx.createDynamicsCompressor();
+musicBus.threshold.setValueAtTime(-14, audioCtx.currentTime);
+musicBus.knee.setValueAtTime(18, audioCtx.currentTime);
+musicBus.ratio.setValueAtTime(4, audioCtx.currentTime);
+musicBus.attack.setValueAtTime(0.003, audioCtx.currentTime);
+musicBus.release.setValueAtTime(0.15, audioCtx.currentTime);
+musicBus.connect(audioCtx.destination);
+
+function synthVoice(freq, opts) {
+    opts = opts || {};
+    const type = opts.type || 'sine';
+    const start = opts.start || 0;
+    const dur = opts.dur || 0.3;
+    const gain = opts.gain != null ? opts.gain : 0.2;
+    const attack = opts.attack != null ? opts.attack : 0.01;
+    const filterHz = opts.filterHz || null;
+    const filterQ = opts.filterQ || 1;
+    const detune = opts.detune || 0;
+    const now = audioCtx.currentTime + start;
+    const osc = audioCtx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, now);
+    if (detune) osc.detune.setValueAtTime(detune, now);
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(gain, now + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    if (filterHz) {
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass'; filter.frequency.setValueAtTime(filterHz, now); filter.Q.value = filterQ;
+        osc.connect(filter); filter.connect(g);
+    } else {
+        osc.connect(g);
+    }
+    g.connect(musicBus);
+    osc.start(now); osc.stop(now + dur + 0.05);
+}
+// 弦楽器風: 2声をわずかにデチューンして重ねるアンサンブル効果
+function synthStrings(freq, dur, gain, start) {
+    synthVoice(freq, { type: 'sawtooth', dur: dur, gain: gain, start: start, attack: 0.05, detune: -6, filterHz: 2200 });
+    synthVoice(freq, { type: 'sawtooth', dur: dur, gain: gain * 0.85, start: start, attack: 0.05, detune: 6, filterHz: 2200 });
+}
+// 金管風: ノコギリ波をローパスで丸めて明るい倍音だけ残す
+function synthBrass(freq, dur, gain, start) {
+    synthVoice(freq, { type: 'sawtooth', dur: dur, gain: gain, start: start, attack: 0.015, filterHz: 1800, filterQ: 2 });
+}
+// 笛風: サイン波中心に薄い倍音を足して息づかいを表現
+function synthFlute(freq, dur, gain, start) {
+    synthVoice(freq, { type: 'sine', dur: dur, gain: gain, start: start, attack: 0.03 });
+    synthVoice(freq * 2, { type: 'sine', dur: dur, gain: gain * 0.15, start: start, attack: 0.03 });
+}
+// 鐘風: 基音+非整数倍音のクラスタで金属的な響きを作る
+function synthBell(freq, dur, gain, start) {
+    synthVoice(freq, { type: 'sine', dur: dur, gain: gain, start: start, attack: 0.002 });
+    synthVoice(freq * 2.41, { type: 'sine', dur: dur * 0.7, gain: gain * 0.45, start: start, attack: 0.002 });
+    synthVoice(freq * 3.8, { type: 'sine', dur: dur * 0.4, gain: gain * 0.25, start: start, attack: 0.002 });
+}
+// コーラス風: 複数のデチューンボイスを持続音として重ねる
+function synthChoir(freq, dur, gain, start) {
+    [0, -8, 7, -14].forEach((cents, i) => {
+        synthVoice(freq, { type: i % 2 === 0 ? 'triangle' : 'sine', dur: dur, gain: gain * (i === 0 ? 1 : 0.55), start: start, attack: dur * 0.3, detune: cents });
+    });
+}
+// 重低音: サブオクターブを重ねてボス戦にふさわしい重さを出す
+function synthSubBass(freq, dur, gain, start) {
+    synthVoice(freq, { type: 'square', dur: dur, gain: gain, start: start, attack: 0.005, filterHz: 300 });
+    synthVoice(freq / 2, { type: 'sine', dur: dur, gain: gain * 0.8, start: start, attack: 0.005 });
+}
+// 一定間隔でstepFnを呼ぶ簡易シーケンサー。bgmIntervalを共有するのでstopBGM()で必ず止まる。
+function startSequencer(stepMs, stepFn, stepCount) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    stopBGM();
+    let step = 0;
+    bgmInterval = setInterval(() => {
+        stepFn(step);
+        step = (step + 1) % stepCount;
+    }, stepMs);
+}
+
 function playSound(type) {
     if (audioCtx.state === 'suspended') audioCtx.resume();
     const osc = audioCtx.createOscillator();
@@ -49,12 +134,13 @@ function playSound(type) {
         gainNode.gain.setValueAtTime(0.5, now); gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
         osc.start(now); osc.stop(now + 0.4);
     } else if (type === 'fanfare') {
-        osc.type = 'square'; osc.frequency.setValueAtTime(523.25, now);
-        osc.frequency.setValueAtTime(659.25, now + 0.15);
-        osc.frequency.setValueAtTime(783.99, now + 0.3);
-        osc.frequency.setValueAtTime(1046.50, now + 0.45);
-        gainNode.gain.setValueAtTime(0.2, now); gainNode.gain.linearRampToValueAtTime(0, now + 1.5);
-        osc.start(now); osc.stop(now + 1.5);
+        // 勝利ファンファーレ（オリジナル）: 低音のパンチ+金管アルペジオで短く力強く
+        synthSubBass(196.00, 0.22, 0.22, 0);
+        synthBrass(523.25, 0.24, 0.22, 0.02);
+        synthBrass(659.25, 0.24, 0.22, 0.13);
+        synthBrass(783.99, 0.26, 0.22, 0.24);
+        synthBrass(1046.50, 0.5, 0.26, 0.36);
+        synthStrings(1046.50, 0.5, 0.10, 0.36);
     } else if (type === 'gacha') {
         osc.type = 'triangle'; osc.frequency.setValueAtTime(880, now);
         osc.frequency.exponentialRampToValueAtTime(1760, now + 0.5);
@@ -68,30 +154,27 @@ function playSound(type) {
         gainNode.gain.linearRampToValueAtTime(0, now + 2.0);
         osc.start(now); osc.stop(now + 2.0);
     } else if (type === 'fanfareGrand') {
-        osc.type = 'square'; osc.frequency.setValueAtTime(523.25, now);
-        osc.frequency.setValueAtTime(659.25, now + 0.12);
-        osc.frequency.setValueAtTime(783.99, now + 0.24);
-        osc.frequency.setValueAtTime(987.77, now + 0.36);
-        osc.frequency.setValueAtTime(1174.66, now + 0.48);
-        gainNode.gain.setValueAtTime(0.25, now); gainNode.gain.linearRampToValueAtTime(0, now + 1.8);
-        osc.start(now); osc.stop(now + 1.8);
+        // Sランク/SSランク召喚用（オリジナル）: fanfareより一段豪華なアルペジオ+コーラス
+        synthSubBass(196.00, 0.3, 0.24, 0);
+        synthBrass(523.25, 0.22, 0.22, 0.02);
+        synthBrass(659.25, 0.22, 0.22, 0.12);
+        synthBrass(783.99, 0.22, 0.22, 0.22);
+        synthBrass(987.77, 0.26, 0.24, 0.32);
+        synthBrass(1174.66, 0.6, 0.26, 0.43);
+        synthStrings(1174.66, 0.6, 0.14, 0.43);
+        synthChoir(587.33, 1.0, 0.07, 0.43);
     } else if (type === 'fanfareEpic') {
-        osc.type = 'square'; osc.frequency.setValueAtTime(523.25, now);
-        osc.frequency.setValueAtTime(659.25, now + 0.1);
-        osc.frequency.setValueAtTime(783.99, now + 0.2);
-        osc.frequency.setValueAtTime(1046.5, now + 0.3);
-        osc.frequency.setValueAtTime(1318.51, now + 0.4);
-        osc.frequency.setValueAtTime(1567.98, now + 0.5);
-        osc.frequency.setValueAtTime(2093, now + 0.6);
-        gainNode.gain.setValueAtTime(0.3, now); gainNode.gain.linearRampToValueAtTime(0, now + 2.2);
-        osc.start(now); osc.stop(now + 2.2);
-        // SSS限定: 低音の重なりでよりゴージャスに聴かせる
-        const bass = audioCtx.createOscillator(); const bassGain = audioCtx.createGain();
-        bass.type = 'triangle'; bass.frequency.setValueAtTime(261.63, now);
-        bass.frequency.setValueAtTime(329.63, now + 0.3); bass.frequency.setValueAtTime(392, now + 0.6);
-        bass.connect(bassGain); bassGain.connect(audioCtx.destination);
-        bassGain.gain.setValueAtTime(0.18, now); bassGain.gain.linearRampToValueAtTime(0, now + 2.2);
-        bass.start(now); bass.stop(now + 2.2);
+        // SSSランク召喚用（オリジナル）: 最も豪華。金管+弦+コーラス+鐘を重ねる
+        synthSubBass(174.61, 0.32, 0.26, 0);
+        synthBrass(523.25, 0.20, 0.22, 0.02);
+        synthBrass(659.25, 0.20, 0.22, 0.10);
+        synthBrass(783.99, 0.20, 0.22, 0.18);
+        synthBrass(1046.50, 0.22, 0.24, 0.26);
+        synthBrass(1318.51, 0.22, 0.26, 0.34);
+        synthBrass(1567.98, 0.8, 0.28, 0.42);
+        synthStrings(1567.98, 0.8, 0.16, 0.42);
+        synthChoir(783.99, 1.3, 0.09, 0.42);
+        synthBell(2093.00, 1.4, 0.12, 0.42);
     } else if (type === 'gachasss') {
         osc.type = 'sawtooth'; osc.frequency.setValueAtTime(220, now);
         osc.frequency.exponentialRampToValueAtTime(2800, now + 1.0);
@@ -111,38 +194,103 @@ function playSound(type) {
 }
 
 let bgmInterval = null;
+
+// フィールドBGM（オリジナル）: D dorian。前半8ステップは静か(笛のみ)、
+// 後半8ステップは金管+弦+ベースで盛り上がる「静と動」を1周期で繰り返す。
+function playFieldBGM() {
+    const stepMs = 260;
+    const stepDur = stepMs / 1000;
+    const quietMelody = [440, 0, 587.33, 0, 523.25, 0, 440, 0]; // A4 . D5 . C5 . A4 .
+    const climaxMelody = [587.33, 698.46, 880, 783.99, 698.46, 587.33, 523.25, 587.33]; // D5 F5 A5 G5 F5 D5 C5 D5
+    const climaxBass = [146.83, 146.83, 220, 220, 146.83, 146.83, 196.00, 220]; // D3 D3 A3 A3 D3 D3 G3 A3
+    const padChord = [293.66, 349.23, 440]; // D4 F4 A4
+
+    startSequencer(stepMs, (step) => {
+        if (step < 8) {
+            if (step === 0) padChord.forEach(f => synthStrings(f, stepDur * 8, 0.045, 0));
+            const n = quietMelody[step];
+            if (n) synthFlute(n, stepDur * 1.6, 0.13, 0);
+        } else {
+            const i = step - 8;
+            if (step === 8) padChord.forEach(f => synthStrings(f, stepDur * 8, 0.08, 0));
+            synthBrass(climaxMelody[i], stepDur * 1.1, 0.15, 0);
+            synthVoice(climaxBass[i], { type: 'triangle', dur: stepDur * 1.05, gain: 0.13, attack: 0.01 });
+        }
+    }, 16);
+}
+
+// 戦闘BGM（オリジナル）: intensity='normal'(通常)/'a'(Aランク=厚み追加)/'boss'(Sランク=最も壮大)
+function playBattleBGM(intensity) {
+    const stepMs = intensity === 'boss' ? 170 : (intensity === 'a' ? 140 : 150);
+    const stepDur = stepMs / 1000;
+    const bassNotes = [164.81, 164.81, 174.61, 164.81, 164.81, 164.81, 196.00, 174.61]; // E3系の緊張感あるベースライン
+    const melodyNotes = [0, 659.25, 0, 783.99, 0, 659.25, 0, 698.46]; // E5 . G5 . E5 . F5 の短い旋律断片
+
+    startSequencer(stepMs, (step) => {
+        const bassFreq = bassNotes[step];
+        synthVoice(bassFreq, { type: 'sawtooth', dur: stepDur * 0.9, gain: 0.15, attack: 0.005, filterHz: 500 });
+
+        const mel = melodyNotes[step];
+        if (mel) synthVoice(mel, { type: 'square', dur: stepDur * 0.5, gain: 0.10, attack: 0.005, filterHz: 2600 });
+
+        if (intensity === 'a' || intensity === 'boss') {
+            // Aランク以上: 短3度上のハーモニーと低いオクターブを重ねて音を厚くする
+            if (mel) synthVoice(mel * 1.1892, { type: 'square', dur: stepDur * 0.5, gain: 0.06, attack: 0.005, filterHz: 2600 });
+            if (step % 4 === 0) synthVoice(bassFreq / 2, { type: 'sawtooth', dur: stepDur * 1.6, gain: 0.08, attack: 0.02, filterHz: 400 });
+        }
+        if (intensity === 'boss') {
+            // Sランク/ボス戦: 重い低音・鐘・コーラス風の音色を加えて最も壮大にする
+            if (step % 2 === 0) synthSubBass(bassFreq / 2, stepDur * 1.4, 0.17, 0);
+            if (step % 4 === 0) synthBell(1046.50, 1.0, 0.09, 0);
+            if (step === 0) synthChoir(220.00, stepDur * 8, 0.045, 0);
+        }
+    }, 8);
+}
+
 function playFastEpicBGM(isBattle = false) {
     if (audioCtx.state === 'suspended') audioCtx.resume();
     stopBGM();
-    const fieldNotes = [440, 523.25, 659.25, 880, 659.25, 523.25, 440, 392, 440, 523.25, 659.25, 1046.5, 880, 659.25, 523.25, 659.25];
-    const battleNotes = [349.23, 440, 523.25, 698.46, 349.23, 440, 523.25, 698.46, 329.63, 415.30, 493.88, 659.25, 329.63, 415.30, 493.88, 659.25];
-    const shopNotes = [659.25, 880, 1046.5, 659.25, 880, 1046.5];
-    const notes = isBattle === 'shop' ? shopNotes : (isBattle ? battleNotes : fieldNotes);
-    const tempo = isBattle === 'shop' ? 180 : (isBattle ? 80 : 120);
-    const synthType = isBattle ? 'sawtooth' : 'sine';
-    let noteIdx = 0;
 
-    bgmInterval = setInterval(() => {
-        const osc = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-        osc.type = synthType; osc.frequency.value = notes[noteIdx];
-        osc.connect(gainNode); gainNode.connect(audioCtx.destination);
-        const now = audioCtx.currentTime;
-        gainNode.gain.setValueAtTime(0.04, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, now + (tempo / 1000));
-        osc.start(now); osc.stop(now + (tempo / 1000));
-        noteIdx = (noteIdx + 1) % notes.length;
-    }, tempo);
+    if (isBattle === 'shop') {
+        // 召喚の祭壇の環境音（変更しない）
+        const shopNotes = [659.25, 880, 1046.5, 659.25, 880, 1046.5];
+        const tempo = 180;
+        let noteIdx = 0;
+        bgmInterval = setInterval(() => {
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.type = 'sawtooth'; osc.frequency.value = shopNotes[noteIdx];
+            osc.connect(gainNode); gainNode.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+            gainNode.gain.setValueAtTime(0.04, now);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, now + (tempo / 1000));
+            osc.start(now); osc.stop(now + (tempo / 1000));
+            noteIdx = (noteIdx + 1) % shopNotes.length;
+        }, tempo);
+        return;
+    }
+
+    if (isBattle) {
+        // 敵ランク(C/A/S)に応じて戦闘BGMの厚みを変える。戦闘システム自体には触れない。
+        const tier = currentEnemy && currentEnemy.tier;
+        const intensity = tier === 'boss' ? 'boss' : (tier === 'mid' ? 'a' : 'normal');
+        playBattleBGM(intensity);
+        return;
+    }
+
+    playFieldBGM();
 }
 function stopBGM() { if (bgmInterval) { clearInterval(bgmInterval); bgmInterval = null; } }
 
 // 召喚中: レア度が上がるほど音数が増え、テンポが速く、音色が豪華になるオリジナルBGM
+// ※ tempo(=長さ・溜めの周期)とnotes(主旋律)は既存の演出タイミングに合わせて一切変更しない。
+//    bass/harmony/bellは追加の重ね声のみで、B/Aランクは従来どおり単声のまま。
 const RANK_BGM_PATTERNS = {
     B: { notes: [523.25, 659.25], tempo: 300, synthType: 'sine' },
     A: { notes: [523.25, 659.25, 783.99, 659.25], tempo: 240, synthType: 'sine' },
-    S: { notes: [659.25, 783.99, 987.77, 783.99, 659.25, 987.77], tempo: 190, synthType: 'triangle' },
-    SS: { notes: [783.99, 987.77, 1174.66, 987.77, 1318.51, 987.77, 1174.66, 880], tempo: 150, synthType: 'triangle' },
-    SSS: { notes: [987.77, 1174.66, 1318.51, 1567.98, 1318.51, 1760, 1567.98, 1318.51, 1174.66, 1567.98, 1975.53, 1567.98], tempo: 110, synthType: 'sawtooth' }
+    S: { notes: [659.25, 783.99, 987.77, 783.99, 659.25, 987.77], tempo: 190, synthType: 'triangle', bass: true },
+    SS: { notes: [783.99, 987.77, 1174.66, 987.77, 1318.51, 987.77, 1174.66, 880], tempo: 150, synthType: 'triangle', bass: true, harmony: true },
+    SSS: { notes: [987.77, 1174.66, 1318.51, 1567.98, 1318.51, 1760, 1567.98, 1318.51, 1174.66, 1567.98, 1975.53, 1567.98], tempo: 110, synthType: 'sawtooth', bass: true, harmony: true, bell: true }
 };
 function playRankSummonBGM(rankKey) {
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -150,14 +298,22 @@ function playRankSummonBGM(rankKey) {
     const pattern = RANK_BGM_PATTERNS[rankKey] || RANK_BGM_PATTERNS.B;
     let noteIdx = 0;
     bgmInterval = setInterval(() => {
+        const freq = pattern.notes[noteIdx];
+        const dur = pattern.tempo / 1000;
         const osc = audioCtx.createOscillator();
         const gainNode = audioCtx.createGain();
-        osc.type = pattern.synthType; osc.frequency.value = pattern.notes[noteIdx];
+        osc.type = pattern.synthType; osc.frequency.value = freq;
         osc.connect(gainNode); gainNode.connect(audioCtx.destination);
         const now = audioCtx.currentTime;
         gainNode.gain.setValueAtTime(0.05, now);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, now + (pattern.tempo / 1000));
-        osc.start(now); osc.stop(now + (pattern.tempo / 1000));
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + dur);
+        osc.start(now); osc.stop(now + dur);
+
+        // レア度が高いほど同時に鳴る音を増やして豪華にする（テンポ・主旋律の周期は変えない）
+        if (pattern.bass && noteIdx % 2 === 0) synthVoice(freq / 2, { type: 'triangle', dur: dur * 1.6, gain: 0.06, attack: 0.01 });
+        if (pattern.harmony) synthVoice(freq * 1.5, { type: pattern.synthType, dur: dur * 0.8, gain: 0.04, attack: 0.005 });
+        if (pattern.bell && noteIdx % 3 === 0) synthBell(freq * 2, dur * 2, 0.05, 0);
+
         noteIdx = (noteIdx + 1) % pattern.notes.length;
     }, pattern.tempo);
 }
