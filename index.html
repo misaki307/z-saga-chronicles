@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Z-SAGA: CHRONICLES</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="game-container">
+
+    <!-- 画面1: 覚醒の儀式 -->
+    <div id="ritual-screen" class="screen active">
+      <div class="ritual-content">
+        <!-- ロゴ: assets/logo.png があれば画像を、無ければテキストロゴにフォールバック -->
+        <img id="logo-img" src="assets/logo.png" alt="Z-SAGA: CHRONICLES" class="logo-img hidden">
+        <h1 class="logo" id="logo-text">
+          <span class="z-motif">Z</span>-SAGA<br>
+          <span class="subtitle">〜竜の記憶〜</span>
+        </h1>
+        <p>眠りについた古の遺物を、<br>祭壇へと捧げよ…</p>
+
+        <div class="upload-area" id="upload-area">
+          <span>📸 遺物の画像を捧げる (Click/Drop)</span>
+          <input type="file" id="clothing-upload" accept="image/*">
+        </div>
+        <button id="btn-skip" class="retro-btn small-btn" style="margin-top:20px; text-decoration:underline; border:none; background:transparent; box-shadow:none;">※遺物を捧げずに旅立つ</button>
+
+        <div id="analysis-result" class="hidden">
+          <p class="blink">古の神託が下りました</p>
+          <h2 id="result-name"></h2>
+          <p>ジョブ: <span id="result-job"></span></p>
+          <div class="stats">
+            <div>耐久(HP): <span id="stat-hp"></span></div>
+            <div>魔力(MP): <span id="stat-mp"></span></div>
+            <div>俊敏(AGI): <span id="stat-agi"></span></div>
+          </div>
+          <button id="btn-start-adventure" class="retro-btn">祭壇から旅立つ</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 画面2: 循環の冒険（フィールド） -->
+    <div id="game-screen" class="screen hidden">
+      <!-- 伝説1: 風の加護 エフェクトレイヤー -->
+      <div id="trend-overlay" class="hidden"></div>
+
+      <!-- エンカウント・フラッシュエフェクト -->
+      <div id="encounter-effect" class="hidden"></div>
+      <div id="flash-effect" class="hidden"></div>
+
+      <!-- 伝説2: Perfect Fit カットイン -->
+      <div id="cutin-container" class="hidden">
+        <div class="cutin-stripe"></div>
+        <h1 class="cutin-text">✨ Perfect Fit ! ✨</h1>
+      </div>
+
+      <!-- UIオーバーレイ -->
+      <div id="ui-overlay">
+        <!-- 伝説1: 加護通知 -->
+        <div id="trend-notification" class="panel-16bit hidden">
+          💨 現在の加護: <span id="trend-text"></span> 💨
+        </div>
+
+        <!-- 伝説の継承 通知UI -->
+        <div id="legacy-notification" class="panel-16bit hidden" style="position: absolute; top: -100px; left: 50%; transform: translateX(-50%); z-index: 100; cursor: pointer; border-color: #ff66aa; pointer-events: auto; width: 80%;">
+          <h4 style="color:#ff66aa; margin-bottom:5px;">💝 服の評価が届きました</h4>
+          <p id="legacy-text" style="font-size:16px;"></p>
+          <div style="font-size:14px; text-align:right; margin-top:5px; color:#f1c40f;">タップして確認・100G受取</div>
+        </div>
+
+        <!-- バーチャル十字キー (スマホ・マウス用) -->
+        <div id="virtual-dpad" style="pointer-events: auto;">
+          <button class="dpad-btn" id="btn-up">▲</button>
+          <button class="dpad-btn" id="btn-left">◀</button>
+          <button class="dpad-btn" id="btn-right">▶</button>
+          <button class="dpad-btn" id="btn-down">▼</button>
+        </div>
+
+        <div class="top-bar panel-16bit">
+          <div class="player-info">
+            <span id="ui-player-name">勇者</span>
+            <br>HP: <span id="ui-hp">100</span> | <span style="color:#f1c40f;">所持金: <span id="ui-gold">0</span> G</span>
+          </div>
+          <div class="menu-btn-container">
+            <button id="btn-open-shop-direct" class="retro-btn small-btn">🔮 召喚 [G]</button>
+            <button id="btn-open-menu" class="retro-btn small-btn">Menu [M]</button>
+          </div>
+        </div>
+
+        <div class="social-feed">
+          <ul id="feed-list"></ul>
+        </div>
+
+        <div id="event-dialog" class="dialog panel-16bit">
+          <p id="dialog-text">アズライト大陸を探索中...</p>
+        </div>
+
+        <!-- 本格バトルダイアログ -->
+        <div id="battle-dialog" class="dialog panel-16bit hidden">
+          <!-- 戦闘HUD: 勇者のHP/MP -->
+          <div id="battle-hud">
+            <span class="hud-label">勇者</span>
+            <div class="hud-bar-bg hp"><div id="hero-hp-bar" class="hud-bar-fill"></div></div>
+            <span id="hero-hp-text" class="hud-num">100</span>
+            <div class="hud-bar-bg mp"><div id="hero-mp-bar" class="hud-bar-fill"></div></div>
+            <span id="hero-mp-text" class="hud-num">50</span>
+          </div>
+
+          <p id="battle-monster-name" class="monster-name">⚠️ 強欲なゴブリンが現れた！</p>
+
+          <div class="enemy-hp-container">
+            <span>HP:</span>
+            <div class="hp-bar-bg">
+              <div id="enemy-hp-bar" class="hp-bar-fill"></div>
+            </div>
+          </div>
+
+          <p id="battle-msg">「その力、まだ我には及ばぬな…」</p>
+
+          <div id="battle-actions" class="battle-commands">
+            <button id="btn-attack" class="retro-btn cmd-btn">▶ たたかう</button>
+            <button id="btn-ally" class="retro-btn cmd-btn">▶ 仲間を選ぶ</button>
+            <button id="btn-skill" class="retro-btn cmd-btn">▶ 衣装奥義・シームブレイク(威力2倍/MP-10)</button>
+            <button id="btn-item" class="retro-btn cmd-btn">▶ アイテム(回復)</button>
+            <button id="btn-run" class="retro-btn cmd-btn">▶ 逃げる</button>
+          </div>
+
+          <!-- 戦闘中の仲間選択パネル -->
+          <div id="ally-select-panel" class="battle-commands hidden"></div>
+        </div>
+
+        <!-- ステータス（仲間）メニュー -->
+        <div id="status-menu" class="dialog panel-16bit hidden">
+          <h2>🌟 冒険の記録 (Status)</h2>
+          <div class="status-content">
+            <p>宿した遺物: <span id="menu-avatar-name">------</span></p>
+            <p style="color:#f1c40f;">所持金: <span id="menu-gold">0</span> G</p>
+            <div class="listing-panel">
+              <p id="listing-status">出品状況：未出品</p>
+              <button id="btn-list-clothing" class="retro-btn small-btn">現在の服を出品する</button>
+            </div>
+            <hr>
+            <h3>【仲間になった魔物＆召喚した魂】</h3>
+            <ul id="party-list"></ul>
+          </div>
+          <button id="btn-close-menu" class="retro-btn">閉じる [Esc]</button>
+        </div>
+
+        <!-- 時環観測室（召喚） -->
+        <div id="shop-screen" class="dialog panel-16bit hidden">
+          <h2 class="summon-title">時環観測室</h2>
+          <p id="shop-msg">新たな魂（仲間）を召喚しますか？<br>1回: <span style="color:#f1c40f;">100 G</span></p>
+
+          <div class="summon-area">
+              <img class="summon-altar-bg" src="assets/ui/summon_altar.png" alt="">
+              <div id="orbit-shards" aria-hidden="true">
+                <i></i><i></i><i></i><i></i><i></i><i></i>
+              </div>
+              <div id="magic-circle" class="hidden"></div>
+              <img id="gacha-relic" class="hidden" src="assets/ui/chronoseed_dormant.png" alt="時環の種子">
+              <div id="summon-result"></div>
+          </div>
+
+          <div class="battle-commands" style="margin-top:auto;">
+            <button id="btn-summon" class="retro-btn cmd-btn">▶ 時環を起動する</button>
+            <button id="btn-close-shop" class="retro-btn cmd-btn">▶ 観測室を去る</button>
+          </div>
+        </div>
+
+        <!-- 伝説4: ボトルメール (時を越える手紙) -->
+        <div id="bottle-mail-dialog" class="dialog hidden">
+          <div class="paper-texture">
+            <h3>💌 時を越えるボトルメール</h3>
+            <p id="bottle-mail-text" class="typewriter"></p>
+            <button id="btn-close-mail" class="retro-btn small-btn" style="margin-top:15px; background:#4e342e;">読むのをやめる</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 16bit Game Canvas -->
+      <canvas id="game-canvas"></canvas>
+
+      <!-- 伝説3: 凱旋の儀(ボス戦後専用レイヤー) -->
+      <div id="fashion-show-screen" class="hidden">
+        <canvas id="fs-canvas" width="800" height="600"></canvas>
+      </div>
+
+    </div>
+
+    <!-- 画面3: 伝説の継承 (クリア後) -->
+    <div id="ending-screen" class="screen hidden">
+      <div class="ending-content panel-16bit">
+        <h1 class="flash-title">✨ 伝説の継承 ✨</h1>
+        <div class="notification-box">
+          <p><strong>【通知】</strong><br>かつての相棒が、新たな旅路で戦っている！<br>巡礼の旅は永遠に続く...</p>
+        </div>
+        <p id="ending-text"></p>
+        <button id="btn-restart" class="retro-btn">新たな遺物を捧げる</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 背景描画モジュール（差し替え予定）: drawMap(ctx, frame) を提供 -->
+  <script src="background.js"></script>
+  <!-- スプライトエンジン: 外部PNGスプライトシートの読込・アニメーション制御 -->
+  <script src="sprites.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

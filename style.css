@@ -1,0 +1,317 @@
+/*
+  16-bit CSS Stylesheet for Z-SAGA: CHRONICLES RPG
+*/
+* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monospace; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; margin: 0; }
+
+#game-container {
+  width: 800px; height: 600px; background-color: #000; border: 4px solid #fff; position: relative; overflow: hidden; image-rendering: pixelated; box-shadow: 0 0 20px rgba(0,255,255,0.3);
+}
+
+.screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; flex-direction: column; justify-content: center; align-items: center; }
+.screen.active { display: flex; }
+
+.panel-16bit {
+  background: linear-gradient(135deg, #000044 0%, #000022 100%);
+  border: 4px solid #fff; border-radius: 4px; box-shadow: inset 0 0 0 4px #0055aa, 4px 4px 0 rgba(0,0,0,0.8);
+  padding: 20px; color: #fff; text-shadow: 2px 2px #000;
+}
+
+/* Ritual */
+#ritual-screen { background: #111122; background-image: repeating-linear-gradient(45deg, #000 25%, transparent 25%, transparent 75%, #000 75%, #000), repeating-linear-gradient(45deg, #000 25%, #111122 25%, #111122 75%, #000 75%, #000); background-position: 0 0, 10px 10px; background-size: 20px 20px; }
+.ritual-content { background: rgba(0, 0, 0, 0.9); padding: 40px; border: 4px solid #55aaff; box-shadow: inset 0 0 0 4px #002255, 0 0 20px #55aaff; text-align: center; border-radius: 4px; width: 80%; z-index: 2; }
+.logo { font-size: 48px; margin-bottom: 20px; color: #fff; text-shadow: 4px 4px #000, 0px 0px 10px #55aaff; }
+.logo-img { display: block; width: 78%; max-width: 560px; margin: 0 auto 20px; image-rendering: pixelated; image-rendering: crisp-edges; }
+.z-motif { color: #00e5ff; font-style: italic; text-shadow: 2px 2px #000, 0px 0px 15px #00e5ff; }
+.subtitle { font-size: 20px; color: #ffaa00; }
+.upload-area { margin: 30px auto; padding: 40px; border: 4px dashed #00e5ff; cursor: pointer; position: relative; transition: all 0.2s; background: rgba(0, 229, 255, 0.1); }
+.upload-area input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.blink { animation: blinker 1s linear infinite; color: #00e5ff; margin-bottom: 10px; }
+.stats { text-align: left; display: inline-block; margin: 20px auto; padding: 10px 20px; border: 2px solid #fff; background: #222; }
+
+/* UI Overlay */
+#ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+.top-bar { display: flex; justify-content: space-between; padding: 10px 20px; border-bottom: none; border-top: none; border-left: none; border-right: none; font-size: 20px; pointer-events: auto; margin: -4px -4px 0 -4px; }
+.menu-btn-container { display: flex; gap: 8px; }
+.social-feed { position: absolute; top: 80px; left: 15px; width: 320px; height: 100px; overflow: hidden; color: #ff66aa; font-weight: bold; font-size: 16px; }
+#feed-list { list-style: none; margin: 0; padding: 0; }
+#feed-list li { margin-bottom: 6px; text-shadow: 2px 2px #000; }
+
+.dialog { pointer-events: auto; position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; text-align: center; font-size: 20px; line-height: 1.5; }
+#event-dialog { bottom: 5px; width: 50%; padding: 10px; font-size: 16px; pointer-events: none; }
+#status-menu { top: 80px; bottom: auto; height: 420px; display: flex; flex-direction: column; z-index: 50; }
+.status-content { text-align: left; margin-top: 15px; overflow-y: auto; flex-grow: 1; }
+.status-content hr { border-color: #55aaff; margin: 15px 0; }
+.status-content ul { list-style: square inside; color: #00e5ff; }
+.listing-panel { margin:12px 0; padding:10px; border:2px solid #8c6ce8; background:rgba(98,65,180,.18); }
+#listing-status { margin-bottom:8px; color:#d9ccff; font-size:14px; }
+.party-member-row { display:flex; align-items:center; gap:10px; min-height:54px; margin:5px 0; padding:3px 7px; border-left:3px solid currentColor; background:rgba(255,255,255,.04); }
+.party-member-row small { display:block; font-size:12px; opacity:.86; }
+.party-sprite { display:inline-block; width:48px; height:48px; flex:0 0 48px; background-image:var(--ally-sprite); background-size:1200% 400%; background-position:0 0; background-repeat:no-repeat; image-rendering:pixelated; }
+.role-mage { color:#ff65d5; } .role-archer { color:#e9e33d; } .role-warrior { color:#ff7143; }
+
+/* Battle Elements */
+.monster-name { color: #ffaa00; font-size: 26px; margin-bottom: 10px; }
+.enemy-hp-container { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 15px; }
+.hp-bar-bg { width: 200px; height: 12px; background: #550000; border: 2px solid #fff; position: relative; }
+.hp-bar-fill { height: 100%; background: #00ff00; width: 100%; transition: width 0.3s cubic-bezier(0.1, 0.7, 1.0, 0.1); }
+
+/* 戦闘HUD: 勇者のHP/MPバー */
+#battle-hud { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
+#battle-hud .hud-label { color: #fff; margin-right: 2px; }
+.hud-bar-bg { width: 90px; height: 10px; border: 2px solid #fff; position: relative; }
+.hud-bar-bg.hp { background: #400; }
+.hud-bar-bg.mp { background: #013; }
+.hud-bar-fill { height: 100%; width: 100%; transition: width 0.3s cubic-bezier(0.1, 0.7, 1.0, 0.1); }
+.hud-bar-bg.hp .hud-bar-fill { background: #2ecc71; }
+.hud-bar-bg.mp .hud-bar-fill { background: #3498db; }
+.hud-num { color: #ddd; min-width: 28px; text-align: left; }
+.battle-commands { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+.cmd-btn { text-align: left; padding-left: 20px; }
+.hidden { display: none !important; }
+
+/* Buttons */
+.retro-btn { font-family: 'DotGothic16', monospace; background: #000; color: #fff; border: 2px solid #fff; padding: 10px 20px; font-size: 20px; cursor: pointer; box-shadow: inset 0 0 0 2px #555, 4px 4px 0 rgba(0,0,0,0.5); transition: transform 0.1s, background 0.1s; }
+.retro-btn.small-btn { padding: 4px 12px; font-size: 16px; }
+.retro-btn:hover { background: #002255; border-color: #00e5ff; box-shadow: inset 0 0 0 2px #00e5ff, 4px 4px 0 rgba(0,0,0,0.5); }
+.retro-btn:active { transform: translate(2px, 2px); box-shadow: inset 0 0 0 2px #00e5ff, 2px 2px 0 rgba(0,0,0,0.5); }
+.retro-btn:disabled { background: #333; color: #888; border-color: #555; cursor: not-allowed; box-shadow: none; transform: none; }
+
+/* Effects */
+@keyframes blinker { 50% { opacity: 0; } }
+#encounter-effect { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: repeating-radial-gradient(circle, #000 0%, #000 10%, #fff 10%, #fff 20%); z-index: 5; mix-blend-mode: exclusion; animation: swirl-noise 1s infinite alternate; pointer-events: none; }
+@keyframes swirl-noise { 0% { transform: scale(1) rotate(0deg); opacity: 0.5; } 100% { transform: scale(3) rotate(30deg); opacity: 0.8; } }
+.screen-shake { animation: shake 0.3s infinite; }
+@keyframes shake { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(5px, 5px); } 50% { transform: translate(-5px, -5px); } 75% { transform: translate(5px, -5px); } }
+
+/* Shop / Gacha */
+#shop-screen {
+  top: 4%; bottom: auto; width: 92%; height: 92%; padding: 12px 16px;
+  display: flex; flex-direction: column; overflow: hidden; z-index: 80;
+  background: #06101f; border-color: #e9d9a4;
+  box-shadow: inset 0 0 0 4px #176c8c, 0 0 30px rgba(0,229,255,.55), 6px 6px 0 rgba(0,0,0,.8);
+}
+.summon-title { color:#fff2bd; letter-spacing:4px; text-shadow:3px 3px #07101e,0 0 12px #21ddec; }
+#shop-msg { min-height: 50px; position:relative; z-index:7; font-size:16px; }
+.summon-area { margin: 5px auto; width: 100%; flex:1; min-height: 330px; position: relative; overflow:hidden; border:3px solid #5bcce0; background:#020711; box-shadow:inset 0 0 20px #000; }
+.summon-altar-bg { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; image-rendering:pixelated; filter:saturate(.92) brightness(.72); }
+.summon-area::after { content:""; position:absolute; inset:0; pointer-events:none; background:radial-gradient(ellipse at center, transparent 0 28%, rgba(0,4,24,.1) 46%, rgba(0,2,14,.76) 100%); }
+.summon-area::before { content:""; position:absolute; inset:0; z-index:2; pointer-events:none; opacity:0; }
+.summon-area.summon-rank-b { border-color:#78909c; }
+.summon-area.summon-rank-b::before { opacity:.18; background:radial-gradient(circle at center,#a8c5d0,transparent 34%); }
+.summon-area.summon-rank-a { border-color:#45b8ff; box-shadow:inset 0 0 25px #0b5f91,0 0 8px #45b8ff; }
+.summon-area.summon-rank-a::before { opacity:.3; background:radial-gradient(circle at center,#87dcff,transparent 42%); animation:rank-glow 1.2s ease-in-out infinite alternate; }
+.summon-area.summon-rank-s { border-color:#81f08d; box-shadow:inset 0 0 30px #126a45,0 0 14px #81f08d; }
+.summon-area.summon-rank-s::before { opacity:.42; background:repeating-conic-gradient(from 0deg,transparent 0 16deg,rgba(116,255,166,.34) 17deg 19deg,transparent 20deg 45deg); animation:rank-spin 5s linear infinite; }
+.summon-area.summon-rank-ss { border-color:#d16cff; box-shadow:inset 0 0 38px #692d94,0 0 20px #d16cff; }
+.summon-area.summon-rank-ss::before { opacity:.58; background:radial-gradient(circle at 25% 30%,#fff 0 2px,transparent 3px),radial-gradient(circle at 75% 60%,#fff 0 2px,transparent 3px),conic-gradient(from 0deg,transparent,#9f5cff88,transparent,#58ddff88,transparent); background-size:70px 70px,95px 95px,100% 100%; animation:rank-spin 2.8s linear infinite,rank-glow .7s ease-in-out infinite alternate; }
+.summon-area.summon-rank-sss { border-color:#ffe673; box-shadow:inset 0 0 48px #b25cff,0 0 28px #ffe673,0 0 46px #66efff; }
+.summon-area.summon-rank-sss::before { opacity:.8; background:repeating-conic-gradient(from 0deg,rgba(255,230,115,.65) 0 2deg,transparent 3deg 18deg),radial-gradient(circle at center,#fff 0 3%,#85f4ff66 12%,#be64ff55 25%,transparent 48%); animation:rank-spin 1.2s linear infinite,rank-glow .35s ease-in-out infinite alternate; }
+@keyframes rank-spin { to{transform:rotate(360deg) scale(1.08)} }
+@keyframes rank-glow { to{opacity:.92;filter:brightness(1.45)} }
+#magic-circle { position:absolute; left:50%; top:50%; width:190px; height:112px; margin:-56px -95px; z-index:3; border:3px solid #70ecff; border-left-color:transparent; border-right-color:#9c5cff; border-radius:50%; animation:spin 1.5s linear infinite; box-shadow:0 0 24px #00e5ff; }
+#magic-circle::before,#magic-circle::after{content:"";position:absolute;left:50%;top:50%;border:2px solid #9c5cff;border-radius:50%;transform:translate(-50%,-50%) rotate(58deg)}
+#magic-circle::before{width:142px;height:176px;border-bottom-color:transparent} #magic-circle::after{width:210px;height:70px;border-color:#72f3ff transparent #72f3ff #72f3ff;transform:translate(-50%,-50%) rotate(-24deg)}
+#gacha-relic { position:absolute; z-index:6; left:50%; top:50%; width:174px; height:174px; object-fit:contain; transform:translate(-50%,-48%); image-rendering:pixelated; filter:drop-shadow(0 8px 5px rgba(0,0,0,.8)); }
+#gacha-relic.relic-arrive { animation:relic-arrive .65s cubic-bezier(.16,.9,.3,1.35); }
+#gacha-relic.relic-charge { animation:relic-charge .7s ease-in-out infinite alternate; filter:drop-shadow(0 0 18px #7df4ff); }
+#gacha-relic.relic-release { animation:relic-release .7s ease-out; width:220px; height:220px; filter:drop-shadow(0 0 28px #9c7dff); }
+#gacha-relic.relic-faded { opacity:.22; transition:opacity .35s; }
+@keyframes relic-arrive { from{transform:translate(-50%,-70%) scale(.15) rotate(-35deg);opacity:0} to{transform:translate(-50%,-48%) scale(1) rotate(0);opacity:1} }
+@keyframes relic-charge { from{transform:translate(-50%,-48%) scale(.96) rotate(-3deg)} to{transform:translate(-50%,-51%) scale(1.08) rotate(3deg)} }
+@keyframes relic-release { from{transform:translate(-50%,-48%) scale(.65);opacity:.4} to{transform:translate(-50%,-48%) scale(1);opacity:1} }
+#orbit-shards { position:absolute; inset:0; z-index:2; opacity:.62; transition:opacity .3s; }
+#orbit-shards i { position:absolute; left:50%; top:50%; width:13px; height:24px; margin:-12px -6px; background:linear-gradient(135deg,#c9fbff 0 18%,#36d6ef 20% 55%,#6d49e5 57% 100%); clip-path:polygon(50% 0,100% 38%,72% 100%,15% 78%,0 24%); filter:drop-shadow(0 0 8px #5defff); animation:shard-float 1.4s steps(4,end) infinite alternate; }
+#orbit-shards i:nth-child(1){transform:translate(-151px,-88px) rotate(-18deg)} #orbit-shards i:nth-child(2){transform:translate(118px,-116px) rotate(38deg);animation-delay:-.4s}
+#orbit-shards i:nth-child(3){transform:translate(164px,18px) rotate(72deg);animation-delay:-.8s} #orbit-shards i:nth-child(4){transform:translate(84px,119px) rotate(130deg);animation-delay:-.2s}
+#orbit-shards i:nth-child(5){transform:translate(-126px,101px) rotate(205deg);animation-delay:-1s} #orbit-shards i:nth-child(6){transform:translate(-174px,4px) rotate(286deg);animation-delay:-.6s}
+.summoning #orbit-shards { opacity:1; animation:shard-pulse .55s ease-in-out infinite alternate; }
+@keyframes shard-float { to{margin-top:-20px;filter:drop-shadow(0 0 14px #b26cff) brightness(1.4)} }
+@keyframes shard-pulse { to{filter:brightness(1.6)} }
+#summon-result { position:absolute; z-index:8; left:50%; bottom:6px; transform:translateX(-50%); width:94%; pointer-events:none; }
+.gacha-reveal { display:flex; flex-direction:column; justify-content:center; align-items:center; gap:8px; animation:ally-reveal .55s cubic-bezier(.16,.88,.25,1.3); }
+.summoned-ally { width:118px; height:118px; flex:0 0 118px; background-image:var(--ally-sprite); background-size:1200% 400%; background-position:0 0; background-repeat:no-repeat; image-rendering:pixelated; filter:drop-shadow(0 0 10px currentColor); }
+.gacha-reveal.role-mage .summoned-ally { filter:drop-shadow(0 0 11px #ff57d3) drop-shadow(0 0 20px #9d42e8); }
+.gacha-reveal.role-archer .summoned-ally { filter:drop-shadow(0 0 11px #fff15b) drop-shadow(0 0 20px #79d640); }
+.gacha-reveal.role-warrior .summoned-ally { filter:drop-shadow(0 0 11px #ff7a3d) drop-shadow(0 0 20px #d9332e); }
+.gacha-reveal.rank-ss .summoned-ally { animation:rare-float .75s ease-in-out infinite alternate; }
+.gacha-reveal.rank-sss .summoned-ally { animation:rare-float .55s ease-in-out infinite alternate; filter:drop-shadow(0 0 12px #fff) drop-shadow(0 0 24px #ffe45d) drop-shadow(0 0 38px #d75cff); }
+
+/* 召喚結果: 仲間のスプライトを画面中央へ大きく表示する。レアリティが高いほど大きい */
+.summoned-ally.big { transition: filter .45s ease; }
+.gacha-reveal.rank-b .summoned-ally.big { width:150px; height:150px; flex-basis:150px; }
+.gacha-reveal.rank-a .summoned-ally.big { width:168px; height:168px; flex-basis:168px; }
+.gacha-reveal.rank-s .summoned-ally.big { width:190px; height:190px; flex-basis:190px; }
+.gacha-reveal.rank-ss .summoned-ally.big { width:212px; height:212px; flex-basis:212px; }
+.gacha-reveal.rank-sss .summoned-ally.big { width:236px; height:236px; flex-basis:236px; }
+/* S以上のみ: カットインを挟むまでは黒いシルエットのまま登場させる */
+.summoned-ally.big.silhouette { filter: brightness(0) drop-shadow(0 0 24px rgba(255,255,255,.9)) !important; animation: none !important; }
+@keyframes ally-reveal { from{transform:translateY(35px) scale(.35);opacity:0} to{transform:none;opacity:1} }
+@keyframes rare-float { to{transform:translateY(-8px) scale(1.04)} }
+@keyframes spin { 100% { transform: rotate(360deg); } }
+
+#flash-effect { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 15; pointer-events: none; opacity: 0; }
+.flash-sss { animation: flash-sss-kf 2.5s ease-out; background: conic-gradient(from 0deg, #fff, #f1c40f, #ff2ee6, #3498db, #fff); }
+.flash-ss { animation: flash-ss-kf 2.1s ease-out; background: radial-gradient(circle, #fff, #9b59b6, transparent); }
+.flash-s { animation: flash-s-kf 1.7s ease-out; background: radial-gradient(circle, #fff, #2ecc71, transparent); }
+.flash-a { animation: flash-a-kf 1.3s ease-out; background: radial-gradient(circle, #fff, #3498db, transparent); }
+.flash-b { animation: flash-b-kf 0.9s ease-out; background: radial-gradient(circle, #fff, #95a5a6, transparent); }
+@keyframes flash-sss-kf { 0%,20% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes flash-ss-kf { 0%,15% { opacity: 0.95; } 100% { opacity: 0; } }
+@keyframes flash-s-kf { 0%,12% { opacity: 0.8; } 100% { opacity: 0; } }
+@keyframes flash-a-kf { 0%,10% { opacity: 0.6; } 100% { opacity: 0; } }
+@keyframes flash-b-kf { 0%,20% { opacity: 0.5; } 100% { opacity: 0; } }
+
+/* 召喚の祭壇: 抽選中の魔法陣の高鳴り演出 */
+#magic-circle.charging-1 { animation: spin 1.5s linear infinite, pulse-charge 0.6s ease-in-out infinite alternate; }
+#magic-circle.charging-2 {
+  animation: spin 0.8s linear infinite, pulse-charge 0.4s ease-in-out infinite alternate;
+  border-top-color: #ff66aa; border-bottom-color: #ff66aa; box-shadow: 0 0 26px #ff66aa, inset 0 0 26px #ff66aa;
+}
+#magic-circle.charging-3 {
+  animation: spin 0.3s linear infinite, pulse-charge 0.15s ease-in-out infinite alternate;
+  border-top-color: #f1c40f; border-bottom-color: #f1c40f; box-shadow: 0 0 40px #f1c40f, inset 0 0 40px #f1c40f;
+}
+@keyframes pulse-charge { 0% { transform: scale(1); } 100% { transform: scale(1.15); } }
+
+/* 召喚結果カード: ランク(B/A/S/SS/SSS)に応じた登場演出 */
+.gacha-card { padding: 8px 20px; border-radius: 4px; display: inline-block; min-width:280px; background:rgba(2,5,22,.92); animation: card-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+@keyframes card-pop { 0% { transform: scale(0.3) rotate(-8deg); opacity: 0; } 60% { transform: scale(1.15) rotate(3deg); opacity: 1; } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
+.gacha-rank { font-size: 26px; font-weight: bold; color: #f1c40f; text-shadow: 2px 2px #000; letter-spacing: 2px; }
+.rarity-b { border: 2px solid #95a5a6; box-shadow: 0 0 6px #95a5a6; }
+.rarity-a { border: 2px solid #3498db; box-shadow: 0 0 10px #3498db; }
+.rarity-s { border: 2px solid #2ecc71; box-shadow: 0 0 16px #2ecc71; }
+.rarity-ss {
+  border: 2px solid #9b59b6; box-shadow: 0 0 22px #9b59b6;
+  animation: card-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275), ss-glow 0.9s ease-in-out infinite alternate;
+}
+.rarity-sss {
+  border: 3px solid #f1c40f; box-shadow: 0 0 26px #f1c40f;
+  animation: card-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275), sss-glow 0.7s ease-in-out infinite alternate;
+}
+@keyframes ss-glow { 0% { box-shadow: 0 0 16px #9b59b6; } 100% { box-shadow: 0 0 32px #fff, 0 0 48px #9b59b6; } }
+@keyframes sss-glow { 0% { box-shadow: 0 0 20px #f1c40f; } 100% { box-shadow: 0 0 40px #fff, 0 0 65px #f1c40f, 0 0 90px #ff2ee6; } }
+
+/* 召喚の祭壇: SSSカットイン専用の金色ストライプ */
+.sss-cutin .cutin-stripe { background: rgba(241, 196, 15, 0.85); box-shadow: 0 0 30px #f1c40f; }
+.sss-cutin .cutin-text { text-shadow: 4px 4px #000, 0 0 25px #f1c40f, 0 0 40px #ff2ee6; }
+.s-cutin .cutin-stripe { background: rgba(129, 240, 141, 0.85); box-shadow: 0 0 22px #81f08d; }
+.s-cutin .cutin-text { text-shadow: 4px 4px #000, 0 0 18px #81f08d; }
+.ss-cutin .cutin-stripe { background: rgba(209, 108, 255, 0.85); box-shadow: 0 0 26px #d16cff; }
+.ss-cutin .cutin-text { text-shadow: 4px 4px #000, 0 0 20px #d16cff, 0 0 32px #58ddff; }
+
+/* #shop-screen は .dialog の translateX(-50%) を基準位置に持つため、
+   汎用の .screen-shake は使わず中央基準を保ったまま揺らす専用クラスを使う */
+.shop-shake { animation: shop-shake-kf 0.3s infinite; }
+@keyframes shop-shake-kf {
+  0%, 100% { transform: translateX(-50%) translate(0, 0); }
+  25% { transform: translateX(-50%) translate(4px, 4px); }
+  50% { transform: translateX(-50%) translate(-4px, -4px); }
+  75% { transform: translateX(-50%) translate(4px, -4px); }
+}
+
+/* 伝説1: Trend Tailwind Effect */
+#trend-notification {
+  position: absolute; top: 80px; left: 50%; transform: translateX(-50%); font-size: 24px; color: #f1c40f; text-shadow: 2px 2px #000; animation: bounce-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); padding: 10px 30px; border-color: #f1c40f; background: rgba(0,0,20, 0.8); z-index: 20;
+}
+@keyframes bounce-in { 0% { top: -50px; opacity: 0; } 100% { top: 80px; opacity: 1; } }
+
+#trend-overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; opacity: 0.3;
+  background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.2) 0, rgba(255,255,255,0.2) 20px, transparent 20px, transparent 40px);
+  background-size: 56px 56px; animation: windFlow 1s linear infinite;
+}
+@keyframes windFlow { 0% { background-position: 0 0; } 100% { background-position: -56px 56px; } }
+
+/* 伝説の継承 (Legacy Notification UI) */
+#legacy-notification {
+  transition: top 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+#legacy-notification.slide-down {
+  top: 150px !important;
+}
+
+/* スマホ対応: タップ領域の確保 (44px以上) */
+.retro-btn, .cmd-btn, button {
+  min-height: 44px !important;
+}
+
+/* バーチャル十字キー (スマホ専用) */
+#virtual-dpad {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  width: 150px;
+  height: 150px;
+  z-index: 100;
+  display: block; /* デスクトップでもマウスで検証可能にするため表示 */
+  opacity: 0.6;
+}
+
+@media (max-width: 850px) {
+  #virtual-dpad { opacity: 0.8; }
+}
+
+.dpad-btn {
+  position: absolute;
+  width: 50px;
+  height: 50px;
+  padding: 0; min-width: 0; min-height: 0;
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  font-size: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.dpad-btn:active {
+  background: rgba(255, 255, 255, 0.8);
+  color: black;
+}
+
+#btn-up { top: 0; left: 50px; }
+#btn-left { top: 50px; left: 0; }
+#btn-right { top: 50px; left: 100px; }
+#btn-down { top: 100px; left: 50px; }
+
+/* 伝説2: Perfect Fit Cut-in */
+#cutin-container {
+  position: absolute; top: 40%; left: 0; width: 100%; height: 100px; display: flex; justify-content: center; align-items: center; z-index: 60; pointer-events: none; overflow: hidden;
+}
+.cutin-stripe { position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: rgba(255, 170, 0, 0.8); transform: skewX(-20deg); box-shadow: 0 0 20px #ffaa00; }
+.cutin-text { font-size: 60px; color: #fff; text-shadow: 4px 4px #000, 0 0 20px #ff0000; font-style: italic; z-index: 61; opacity: 0; transform: scale(0.5); }
+.animate-cutin .cutin-stripe { animation: stripeSlide 1s ease-in-out forwards; }
+.animate-cutin .cutin-text { animation: textPop 1s ease-in-out forwards; }
+@keyframes stripeSlide { 0% { left: -100%; } 20%, 80% { left: 0; } 100% { left: 100%; } }
+@keyframes textPop { 0% { opacity: 0; transform: scale(0.5); } 20%, 80% { opacity: 1; transform: scale(1.2) rotate(-5deg); } 100% { opacity: 0; transform: scale(2); } }
+
+/* 伝説3: Fashion Show Result Layer */
+#fashion-show-screen {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 40;
+}
+
+/* 伝説4: Bottle Mail Retro Window */
+#bottle-mail-dialog {
+  top: 15% !important; bottom: auto; height: auto; padding: 0; border: none; background: transparent; box-shadow: none; z-index: 70;
+}
+.paper-texture {
+  background: #fdf6e3; padding: 30px; color: #4e342e; border: 2px solid #a1887f; border-radius: 4px; box-shadow: inset 0 0 30px rgba(0,0,0,0.1), 10px 10px 0 rgba(0,0,0,0.8);
+  font-family: 'Times New Roman', serif;
+  text-align: left; position: relative;
+}
+.paper-texture::before { content: ""; position: absolute; top: 10px; left: 10px; right: 10px; bottom: 10px; border: 1px dashed #d7ccc8; pointer-events: none; }
+.paper-texture h3 { text-align: center; margin-bottom: 20px; font-family: 'DotGothic16', monospace; border-bottom: 2px dotted #a1887f; padding-bottom: 10px; }
+.typewriter { overflow: hidden; white-space: pre-wrap; margin: 0 auto; letter-spacing: .15em; animation: typing 3s steps(40, end); }
+@keyframes typing { from { max-height: 0; opacity:0; } to { max-height: 200px; opacity:1;} }
+
+/* Ending */
+#ending-screen { background: #000; z-index: 80; }
+.ending-content { width: 85%; }
+.notification-box { background: rgba(0,255,0,0.1); padding: 20px; margin: 20px 0; border: 2px dashed #5f5; color: #5f5; }
+.flash-title { color: #ffaa00; animation: p-flash 1s infinite alternate; }
+@keyframes p-flash { 0% { text-shadow: 0 0 5px #ffaa00; } 100% { text-shadow: 0 0 20px #fff, 0 0 30px #ffaa00; } }
