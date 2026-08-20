@@ -476,6 +476,7 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .pf-roster-card.pf-rarity-s { border-color: #2ecc71; }
 .pf-roster-card.pf-rarity-ss { border-color: #9b59b6; box-shadow: 0 0 6px rgba(155,89,182,.5); }
 .pf-roster-card.pf-rarity-sss { border-color: #f1c40f; box-shadow: 0 0 8px rgba(241,196,15,.6); }
+.pf-roster-card.pf-rarity-hero { border-color: #e9d9a4; box-shadow: 0 0 8px rgba(233,217,164,.55); }
 .pf-roster-card.is-selected { outline: 2px solid #fff; outline-offset: 1px; }
 .pf-roster-card .pf-card-portrait { width: 100%; flex: 1 1 auto; background-repeat: no-repeat; image-rendering: pixelated; min-height: 0; }
 .pf-roster-card .pf-card-name { font-size: 9px; width: 100%; text-align: center; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

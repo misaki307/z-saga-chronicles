@@ -632,7 +632,8 @@ function playRankSummonBGM(rankKey) {
 const GameState = {
     avatar: { name: '', job: '', style: '', color: '#fff', hp: 100, maxHp: 100, mp: 50, maxMp: 50, agi: 30, tension: 0 },
     party: [], // {name, job, style, color, isDragon, originItem} 所持している仲間全員(フィールド追従とは別)
-    activePartyIds: [], // フィールド・戦闘へ実際に同行させる仲間のキー(最大4人、パーティー編成画面で選ぶ)
+    activePartyIds: [], // フィールドへ実際に同行させるパーティーのキー(勇者を含め最大4人、パーティー編成画面で選ぶ)
+    leaderId: 'hero', // 現在フィールドで操作しているリーダーのキー(既定は勇者)
     listing: null, // {id, itemName, status:'listed'|'reviewed'|'completed', rewardClaimed}
     continents: ['封印の塔', 'カジュアル平原', '深淵の森', '荒野の砂漠', '古の山脈', 'アズライト中央大陸'],
     globalTime: 0,
@@ -1767,76 +1768,118 @@ function addOrEnhancePartyMember(candidate) {
     candidate.isNew = true; // 初獲得のみ立てる。パーティー編成画面でキャラ詳細を開いたら既読(false)にする
     GameState.party.push(candidate);
     savePartyData();
-    // 新規獲得キャラは仲間一覧へ追加するだけで、既存の冒険メンバー(activePartyIds)は変更しない。
-    // ただし冒険メンバーが1人もいない(=初めての所持キャラ)場合だけは、誰もついてこない状態を防ぐため
-    // この1人だけを冒険メンバーにする(既存の編成を勝手に変えることにはならない)。
-    if (GameState.activePartyIds.length === 0) setActiveParty([getMemberKey(candidate)]);
+    // 新規獲得キャラは仲間一覧へ追加するだけで、現在の編成(activePartyIds)・フィールドの人数は
+    // 一切変更しない(勇者は常にパーティー候補として存在するため、ここで自動編成する必要はない)。
     if (isPartyFormationOpen) renderPartyFormationScreen(); // 編成画面を開いたまま召喚した場合も一覧を再描画する
     return { merged: false, member: candidate };
 }
 
 // ==========================================
-// 冒険メンバー(フィールド・戦闘へ実際に同行する最大4人)。
-// GameState.party(所持キャラ全員)とは別に、キャラのキー配列(activePartyIds)だけを保持する。
+// パーティー(最大4人・勇者を含む)。
+// 勇者(GameState.avatar)は仲間一覧・パーティーへ選択/除外できる特別なメンバーとして、
+// 専用キー HERO_KEY で activePartyIds へ含められる(GameState.partyの配列自体には入れない)。
+// GameState.party(所持している仲間全員)とは別に、キャラのキー配列(activePartyIds)とリーダー(leaderId)だけを保持する。
 // characterIdが無い旧仲間(魔物・旧セーブ)も一意に指せるよう、フォールバックのキーを使う。
 // ==========================================
+const HERO_KEY = 'hero';
 function getMemberKey(p) {
     if (!p) return null;
+    if (p === GameState.avatar) return HERO_KEY;
     if (p.characterId) return p.characterId;
     if (p.job === '魔物' && p.enemyTypeKey) return `monster:${p.enemyTypeKey}`;
     return `legacy:${p.name}`;
 }
+// キーから実体(勇者 or 所持仲間)を引く
+function resolvePartyMember(key) {
+    if (key === HERO_KEY) return GameState.avatar;
+    return GameState.party.find(p => getMemberKey(p) === key) || null;
+}
 
-// 現在の冒険メンバーを、activePartyIdsの並び順のまま(先頭=リーダー)最大4人返す
-function getActiveParty() {
-    const byKey = new Map(GameState.party.map(p => [getMemberKey(p), p]));
+// 現在のパーティー(勇者を含む場合がある)を、activePartyIdsの並び順のまま最大4人返す。
+// パーティー編成画面(仲間一覧・4枠表示)で使う。
+function getActivePartyResolved() {
     const result = [];
     GameState.activePartyIds.forEach(id => {
-        const p = byKey.get(id);
+        const p = resolvePartyMember(id);
         if (p && !result.includes(p)) result.push(p);
     });
     return result.slice(0, 4);
 }
+// 戦闘は既存仕様どおり勇者(GameState.avatar)を別枠で扱うため、戦闘関連コード(仲間選択・総追撃・
+// Perfect Fit・反撃対象・全滅判定など)からは、このgetActiveParty()を今までどおり「仲間(勇者を除く)」の
+// 意味で呼ぶ。戦闘のロジック・計算式自体はこの関数の中身が変わっても一切変更しない。
+function getActiveParty() {
+    return getActivePartyResolved().filter(p => p !== GameState.avatar);
+}
+// フィールドで先頭に立ち、プレイヤーが操作するキャラ(勇者 or 仲間の誰か)を返す
+function getFieldLeader() {
+    let leader = resolvePartyMember(GameState.leaderId);
+    if (!leader || !GameState.activePartyIds.includes(GameState.leaderId)) {
+        const resolved = getActivePartyResolved();
+        leader = resolved[0] || GameState.avatar;
+        GameState.leaderId = getMemberKey(leader);
+        saveActivePartyIds();
+    }
+    return leader;
+}
+// フィールドでリーダーの後ろへ追従する残りのパーティーメンバー(最大3人、編成順)
+function getFieldFollowers() {
+    const leader = getFieldLeader();
+    return getActivePartyResolved().filter(p => p !== leader).slice(0, 3);
+}
 
 const ACTIVE_PARTY_KEY = 'zsaga_active_party_v1';
+const LEADER_ID_KEY = 'zsaga_leader_id_v1';
 function saveActivePartyIds() {
-    try { localStorage.setItem(ACTIVE_PARTY_KEY, JSON.stringify(GameState.activePartyIds)); } catch (e) { /* 保存できない環境では無視 */ }
+    try {
+        localStorage.setItem(ACTIVE_PARTY_KEY, JSON.stringify(GameState.activePartyIds));
+        localStorage.setItem(LEADER_ID_KEY, GameState.leaderId || HERO_KEY);
+    } catch (e) { /* 保存できない環境では無視 */ }
 }
-// 存在しないID・未所持ID・重複IDを除外し、最大4人までに正規化する。保存済みactivePartyIdsが無い場合だけ、
-// 所持キャラの先頭4人(重複なし)を初期パーティーにする(既存の所持状況・Lv・重複強化は一切変更しない)。
+// 存在しないID・未所持ID・重複IDを除外し、最大4人までに正規化する。保存済みの編成データが無い、
+// または壊れている場合は、所持キャラ全員を編成せず「勇者1人だけ」を初期パーティーにする。
 function loadActivePartyIds() {
-    const ownedKeys = GameState.party.map(getMemberKey);
+    const validKeys = new Set([HERO_KEY, ...GameState.party.map(getMemberKey)]);
     let ids = [];
+    let savedLeader = null;
     try {
         const raw = localStorage.getItem(ACTIVE_PARTY_KEY);
         if (raw) {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed)) ids = parsed;
         }
+        savedLeader = localStorage.getItem(LEADER_ID_KEY);
     } catch (e) { /* 壊れた保存データは無視 */ }
     const seen = new Set();
     let sanitized = ids.filter(id => {
-        if (typeof id !== 'string' || seen.has(id) || !ownedKeys.includes(id)) return false;
+        if (typeof id !== 'string' || seen.has(id) || !validKeys.has(id)) return false;
         seen.add(id); return true;
     }).slice(0, 4);
-    if (sanitized.length === 0 && ownedKeys.length > 0) {
-        // 既存セーブにactivePartyIdsが無い(または全員無効)場合だけ、先頭4人を初期パーティーにする
-        const seenInit = new Set();
-        sanitized = ownedKeys.filter(k => { if (seenInit.has(k)) return false; seenInit.add(k); return true; }).slice(0, 4);
+    if (sanitized.length === 0) {
+        // 編成データが無い/壊れている場合は、所持キャラ全員を編成せず勇者1人だけを初期パーティーにする
+        sanitized = [HERO_KEY];
     }
     GameState.activePartyIds = sanitized;
+    GameState.leaderId = (savedLeader && sanitized.includes(savedLeader)) ? savedLeader : sanitized[0];
     saveActivePartyIds();
 }
 // パーティー編成画面から呼ぶ。最大4人・重複なし・未所持除外を保証してから保存し、フィールド追従を即時更新する。
-function setActiveParty(ids) {
-    const ownedKeys = GameState.party.map(getMemberKey);
+// preferredLeaderIdを渡すとリーダーもそれへ切り替える(編成内に無ければ無視)。
+// リーダーが編成から外れた場合は、残ったメンバーの先頭を新しいリーダーにする。
+function setActiveParty(ids, preferredLeaderId) {
+    const validKeys = new Set([HERO_KEY, ...GameState.party.map(getMemberKey)]);
     const seen = new Set();
     const sanitized = ids.filter(id => {
-        if (seen.has(id) || !ownedKeys.includes(id)) return false;
+        if (seen.has(id) || !validKeys.has(id)) return false;
         seen.add(id); return true;
     }).slice(0, 4);
     if (sanitized.length === 0) return false; // パーティーが0人になる操作は無効
     GameState.activePartyIds = sanitized;
+    if (preferredLeaderId && sanitized.includes(preferredLeaderId)) {
+        GameState.leaderId = preferredLeaderId;
+    } else if (!sanitized.includes(GameState.leaderId)) {
+        GameState.leaderId = sanitized[0]; // リーダーが編成から外れた場合、先頭を新リーダーにする
+    }
     saveActivePartyIds();
     return true;
 }
@@ -2492,6 +2535,7 @@ function updateGame() {
         GameState.avatar.sprite.setDirection(player.vx, player.vy);
         GameState.avatar.sprite.setAction(isMoving ? (hasTrendBuff ? 'run' : 'walk') : 'idle');
     }
+    // 現在パーティーにいる仲間(リーダー・追従とも、勇者を除く)の歩行アニメーションを更新する
     getActiveParty().forEach(p => {
         if (!p.sprite) return;
         p.sprite.setDirection(player.vx, player.vy);
@@ -2639,7 +2683,7 @@ function drawGame() {
         const RANK_SIZE = 3;
         const RANK_GAP = 16; // ランクごとの追従遅延(historyLogのステップ数)
         const SLOT_OFFSET = [-16, 16, 0]; // ランク内の並び順(左・右・中央)
-        getActiveParty().forEach((follower, idx) => {
+        getFieldFollowers().forEach((follower, idx) => {
             const rank = Math.floor(idx / RANK_SIZE);
             const slot = idx % RANK_SIZE;
             const delay = (rank + 1) * RANK_GAP;
@@ -2680,9 +2724,10 @@ function drawGame() {
         hx = 200 + 350 * attackLungeT; hy = 400;
     }
 
-    // 前衛(交代中は仲間、通常時は勇者)を(hx,hy)に描く
-    const frontFighter = (isBattling && activeFighter) ? activeFighter : GameState.avatar;
-    if (!isFashionShow && frontFighter.sprite) {
+    // 前衛(戦闘中の交代仲間・通常時の勇者は既存仕様のまま。フィールドだけは編成中のリーダーを表示する)
+    const fieldLeader = isBattling ? null : getFieldLeader();
+    const frontFighter = (isBattling && activeFighter) ? activeFighter : (isBattling ? GameState.avatar : fieldLeader);
+    if (!isFashionShow && frontFighter && frontFighter.sprite) {
         if (hasTrendBuff && !activeFighter) {
             ctx.fillStyle = 'rgba(255, 255, 0, 0.4)';
             ctx.beginPath(); ctx.arc(hx, hy - 5, 30 + Math.sin(GameState.globalTime * 0.2) * 5, 0, Math.PI * 2); ctx.fill();
@@ -2698,6 +2743,9 @@ function drawGame() {
         if (isBattling && activeFighter) {
             // 交代中の前衛は仲間用の共通ヘルパーを使う(アステア専用ポートレート等の優先順位も後衛グリッドと揃う)
             drawFollowerSprite(activeFighter, hx, hy, 1.5, true);
+        } else if (!isBattling && fieldLeader !== GameState.avatar) {
+            // フィールドのリーダーが仲間の場合も、他の追従仲間と同じヘルパーで描く(専用ポートレート等の優先順位を揃える)
+            drawFollowerSprite(fieldLeader, hx, hy, 1, false);
         } else {
             drawSprite(ctx, frontFighter.sprite, hx, hy, { scale: isBattling ? 1.5 : 1 });
         }
@@ -4056,6 +4104,11 @@ function getPfCharacterRef(p) {
 function getPfRosterMembers() {
     return GameState.party.filter(p => p.job !== '魔物');
 }
+// 勇者を含めた表示用の一覧(勇者は常に先頭)。GameState.party自体には勇者を追加しない。
+function getPfDisplayList() {
+    return [GameState.avatar, ...getPfRosterMembers()];
+}
+function pfIsHero(p) { return p === GameState.avatar; }
 
 function openPartyFormation() {
     if (isBattling || isShopOpen || isFashionShow) return;
@@ -4083,27 +4136,36 @@ function renderPartyFormationScreen() {
 }
 
 function pfPortraitBg(p) {
-    if (!p || !p.portraitPath) return '';
+    if (!p) return '';
+    if (pfIsHero(p)) {
+        // 勇者は専用portraitを持たないため、既存の.party-sprite等と同じく歩行スプライトシートの先頭コマを使う
+        const files = (typeof SPRITE_MANIFEST !== 'undefined' && SPRITE_MANIFEST.hero) ? SPRITE_MANIFEST.hero.files : null;
+        const path = files ? (files[p.job] || files['勇者']) : '';
+        return path ? `background-image:url('${path}'); background-size:2000% 400%; background-position:0 0;` : '';
+    }
+    if (p.name === ASTERIA_NAME) return `background-image:url('${ASTERIA_PORTRAIT_PATH}'); background-size:600% 300%; background-position:0 0;`;
+    if (!p.portraitPath) return '';
     return `background-image:url('${p.portraitPath}'); background-size:contain; background-position:center;`;
 }
 
 function renderPfSlots() {
     const wrap = document.getElementById('pf-slots');
-    const activeParty = getActiveParty();
+    const activeParty = getActivePartyResolved();
     document.getElementById('pf-slot-count').textContent = `${activeParty.length}/4`;
     wrap.innerHTML = '';
     for (let i = 0; i < 4; i++) {
         const member = activeParty[i];
         const slot = document.createElement('div');
         const key = member ? getMemberKey(member) : null;
-        slot.className = 'pf-slot' + (member ? ' filled' : '') + (i === 0 && member ? ' is-leader' : '') + (key && key === pfSelectedKey ? ' is-selected' : '');
+        const isLeader = member && key === GameState.leaderId;
+        slot.className = 'pf-slot' + (member ? ' filled' : '') + (isLeader ? ' is-leader' : '') + (key && key === pfSelectedKey ? ' is-selected' : '');
         if (member) {
-            const isAsteria = member.name === ASTERIA_NAME;
-            const portraitStyle = isAsteria ? '' : pfPortraitBg(member);
+            const portraitStyle = pfPortraitBg(member);
+            const rankBadge = pfIsHero(member) ? '主人公' : (member.rarity || '');
             slot.innerHTML = `
               <span class="pf-slot-num">${i + 1}</span>
-              ${i === 0 ? '<span class="pf-slot-leader-badge">👑リーダー</span>' : ''}
-              ${member.rarity ? `<span class="pf-slot-rank-badge">${member.rarity}</span>` : ''}
+              ${isLeader ? '<span class="pf-slot-leader-badge">👑リーダー</span>' : ''}
+              ${rankBadge ? `<span class="pf-slot-rank-badge">${rankBadge}</span>` : ''}
               <div class="pf-slot-portrait" style="${portraitStyle}"></div>
               <div class="pf-slot-name">${member.name}</div>`;
             slot.addEventListener('click', () => {
@@ -4114,7 +4176,7 @@ function renderPfSlots() {
         } else {
             slot.innerHTML = `<span class="pf-slot-num">${i + 1}</span><div class="pf-slot-empty-label">＋<br>仲間を選ぶ</div>`;
             slot.addEventListener('click', () => {
-                if (pfSelectedKey && !getActiveParty().some(m => getMemberKey(m) === pfSelectedKey)) {
+                if (pfSelectedKey && !GameState.activePartyIds.includes(pfSelectedKey)) {
                     pfFormMember(pfSelectedKey);
                 }
             });
@@ -4125,15 +4187,18 @@ function renderPfSlots() {
 
 function renderPfRoster() {
     const grid = document.getElementById('pf-roster-grid');
-    const activeKeys = getActiveParty().map(getMemberKey);
-    let members = getPfRosterMembers();
-    if (pfRankFilter !== 'ALL') members = members.filter(p => p.rarity === pfRankFilter);
+    const activeKeys = GameState.activePartyIds;
+    let members = getPfDisplayList();
+    // ランクフィルターは勇者(ランク概念なし)には適用しない → ALL以外を選んだ時だけ勇者を除外する
+    if (pfRankFilter !== 'ALL') members = members.filter(p => !pfIsHero(p) && p.rarity === pfRankFilter);
     if (pfStyleFilter !== 'ALL') members = members.filter(p => p.style === pfStyleFilter);
-    members = members.slice().sort((a, b) => {
+    const heroEntry = members.find(pfIsHero);
+    let rest = members.filter(p => !pfIsHero(p)).sort((a, b) => {
         if (pfSortMode === 'level') return (b.level || 1) - (a.level || 1);
         if (pfSortMode === 'name') return (a.name || '').localeCompare(b.name || '', 'ja');
         return PF_RANK_ORDER.indexOf(a.rarity) - PF_RANK_ORDER.indexOf(b.rarity);
     });
+    members = heroEntry ? [heroEntry, ...rest] : rest; // 勇者は常に先頭に固定表示する
     grid.innerHTML = '';
     if (members.length === 0) {
         grid.innerHTML = '<div class="pf-empty-roster">条件に合う仲間がいません</div>';
@@ -4141,14 +4206,13 @@ function renderPfRoster() {
     }
     members.forEach(p => {
         const key = getMemberKey(p);
-        const isAsteria = p.name === ASTERIA_NAME;
-        const portraitStyle = isAsteria
-            ? `background-image:url('${ASTERIA_PORTRAIT_PATH}'); background-size:600% 300%; background-position:0 0;`
-            : pfPortraitBg(p);
+        const portraitStyle = pfPortraitBg(p);
+        const rankClass = pfIsHero(p) ? 'hero' : (p.rarity || 'c').toLowerCase();
+        const rankLabel = pfIsHero(p) ? '主人公' : (p.rarity || '');
         const card = document.createElement('div');
-        card.className = `pf-roster-card pf-rarity-${(p.rarity || 'c').toLowerCase()}${key === pfSelectedKey ? ' is-selected' : ''}`;
+        card.className = `pf-roster-card pf-rarity-${rankClass}${key === pfSelectedKey ? ' is-selected' : ''}`;
         card.innerHTML = `
-          <span class="pf-card-rank">${p.rarity || ''}</span>
+          <span class="pf-card-rank">${rankLabel}</span>
           ${activeKeys.includes(key) ? '<span class="pf-card-check">✓</span>' : ''}
           ${p.isNew ? '<span class="pf-card-new">NEW</span>' : ''}
           <div class="pf-card-portrait" style="${portraitStyle}"></div>
@@ -4166,40 +4230,58 @@ function renderPfRoster() {
 function renderPfDetail() {
     const col = document.getElementById('pf-detail-col');
     if (!pfSelectedKey) { col.innerHTML = '<div class="pf-detail-empty">キャラをタップすると詳細を確認できます</div>'; return; }
-    const member = GameState.party.find(p => getMemberKey(p) === pfSelectedKey);
+    const member = resolvePartyMember(pfSelectedKey);
     if (!member) { pfSelectedKey = null; col.innerHTML = '<div class="pf-detail-empty">キャラをタップすると詳細を確認できます</div>'; return; }
+    const isHero = pfIsHero(member);
 
-    const isAsteria = member.name === ASTERIA_NAME;
-    const portraitStyle = isAsteria
-        ? `background-image:url('${ASTERIA_PORTRAIT_PATH}'); background-size:600% 300%; background-position:0 0;`
-        : pfPortraitBg(member);
+    const portraitStyle = pfPortraitBg(member);
     const styleColor = STYLE_COLORS[member.style] || '#fff';
-    const ref = getPfCharacterRef(member);
-    const hpKnown = typeof member.hp === 'number' && typeof member.maxHp === 'number';
-    const hpPct = hpKnown ? Math.max(0, Math.min(100, (member.hp / member.maxHp) * 100)) : 100;
-    const atk = Math.round(getAllyAttackBase(member, 'select') * getAllyDamageMultiplier(member));
-    const activeParty = getActiveParty();
-    const isActive = activeParty.some(m => getMemberKey(m) === pfSelectedKey);
+    const activeParty = getActivePartyResolved();
+    const isActive = GameState.activePartyIds.includes(pfSelectedKey);
+    const isLeader = pfSelectedKey === GameState.leaderId;
 
-    let html = `
-      <div class="pf-detail-portrait" style="${portraitStyle}"></div>
-      <div class="pf-detail-rank">${member.rarity || ''}</div>
-      <div class="pf-detail-name">✨${member.name}</div>
-      <div class="pf-detail-row">${ref.job || ''}${ref.weapon ? ` / ${ref.weapon}` : ''}</div>
-      <div class="pf-detail-row"><span style="color:${styleColor};">${member.style || ''}属性</span> ／ Lv.${member.level || 1}</div>`;
-    if (hpKnown) {
-        html += `<div class="pf-detail-row">HP ${Math.max(0, member.hp)}/${member.maxHp}</div>
-          <div class="pf-detail-hpbar-bg"><div class="pf-detail-hpbar-fill" style="width:${hpPct}%; background:${member.hp <= 0 ? '#803030' : (hpPct < 30 ? '#e05a3a' : '#4fd06a')};"></div></div>`;
-    }
-    html += `<div class="pf-detail-row">攻撃力の目安 ${atk}</div>`;
-    if (member.duplicateCount) {
-        html += `<div class="pf-detail-row">継承${member.duplicateCount}回 / 攻撃+${member.atkBonusPct || 0}% / スキルLv${member.skillLevel || 1}</div>`;
+    let html = `<div class="pf-detail-portrait" style="${portraitStyle}"></div>`;
+    if (isHero) {
+        const hpKnown = typeof member.hp === 'number' && typeof member.maxHp === 'number';
+        const hpPct = hpKnown ? Math.max(0, Math.min(100, (member.hp / member.maxHp) * 100)) : 100;
+        html += `
+          <div class="pf-detail-rank">主人公</div>
+          <div class="pf-detail-name">✨${member.name}</div>
+          <div class="pf-detail-row">${member.job || ''}</div>
+          <div class="pf-detail-row"><span style="color:${styleColor};">${member.style || ''}属性</span></div>`;
+        if (hpKnown) {
+            html += `<div class="pf-detail-row">HP ${Math.max(0, member.hp)}/${member.maxHp}</div>
+              <div class="pf-detail-hpbar-bg"><div class="pf-detail-hpbar-fill" style="width:${hpPct}%; background:${member.hp <= 0 ? '#803030' : (hpPct < 30 ? '#e05a3a' : '#4fd06a')};"></div></div>`;
+        }
+        if (typeof member.mp === 'number' && typeof member.maxMp === 'number') {
+            html += `<div class="pf-detail-row">MP ${member.mp}/${member.maxMp}</div>`;
+        }
+        if (typeof member.agi === 'number') html += `<div class="pf-detail-row">俊敏(AGI) ${member.agi}</div>`;
     } else {
-        html += `<div class="pf-detail-row">スキルLv${member.skillLevel || 1}</div>`;
+        const ref = getPfCharacterRef(member);
+        const hpKnown = typeof member.hp === 'number' && typeof member.maxHp === 'number';
+        const hpPct = hpKnown ? Math.max(0, Math.min(100, (member.hp / member.maxHp) * 100)) : 100;
+        const atk = Math.round(getAllyAttackBase(member, 'select') * getAllyDamageMultiplier(member));
+        html += `
+          <div class="pf-detail-rank">${member.rarity || ''}</div>
+          <div class="pf-detail-name">✨${member.name}</div>
+          <div class="pf-detail-row">${ref.job || ''}${ref.weapon ? ` / ${ref.weapon}` : ''}</div>
+          <div class="pf-detail-row"><span style="color:${styleColor};">${member.style || ''}属性</span> ／ Lv.${member.level || 1}</div>`;
+        if (hpKnown) {
+            html += `<div class="pf-detail-row">HP ${Math.max(0, member.hp)}/${member.maxHp}</div>
+              <div class="pf-detail-hpbar-bg"><div class="pf-detail-hpbar-fill" style="width:${hpPct}%; background:${member.hp <= 0 ? '#803030' : (hpPct < 30 ? '#e05a3a' : '#4fd06a')};"></div></div>`;
+        }
+        html += `<div class="pf-detail-row">攻撃力の目安 ${atk}</div>`;
+        if (member.duplicateCount) {
+            html += `<div class="pf-detail-row">継承${member.duplicateCount}回 / 攻撃+${member.atkBonusPct || 0}% / スキルLv${member.skillLevel || 1}</div>`;
+        } else {
+            html += `<div class="pf-detail-row">スキルLv${member.skillLevel || 1}</div>`;
+        }
     }
 
     html += '<div class="pf-detail-actions">';
     if (isActive) {
+        if (!isLeader) html += `<button id="pf-btn-leader" class="retro-btn small-btn">リーダーにする</button>`;
         const disabled = activeParty.length <= 1 ? 'disabled' : '';
         html += `<button id="pf-btn-remove" class="retro-btn small-btn" ${disabled}>外す</button>`;
         if (activeParty.length <= 1) html += `<div class="pf-swap-hint">※最低1人は必要です</div>`;
@@ -4213,6 +4295,8 @@ function renderPfDetail() {
     html += '</div>';
     col.innerHTML = html;
 
+    const leaderBtn = document.getElementById('pf-btn-leader');
+    if (leaderBtn) leaderBtn.addEventListener('click', () => pfSetLeader(pfSelectedKey));
     const removeBtn = document.getElementById('pf-btn-remove');
     if (removeBtn) removeBtn.addEventListener('click', () => pfRemoveMember(pfSelectedKey));
     const formBtn = document.getElementById('pf-btn-form');
@@ -4254,6 +4338,14 @@ function pfSwapSlot(slotIndex, newKey) {
     playSound('select');
     pfSwapPendingKey = null;
     pfSelectedKey = newKey;
+    renderPartyFormationScreen();
+}
+// 編成中のキャラから自由にリーダー(フィールドで操作するキャラ)を選ぶ
+function pfSetLeader(key) {
+    if (!GameState.activePartyIds.includes(key)) return;
+    GameState.leaderId = key;
+    saveActivePartyIds();
+    playSound('select');
     renderPartyFormationScreen();
 }
 
