@@ -1234,32 +1234,32 @@ CHARACTER_ROSTER.forEach(c => CHARACTER_POOL[c.rank].push(c));
 
 // 召喚結果の表示専用: 各portrait(256x256透過PNG)内で実際にキャラが描かれている範囲(bbox)。
 // 画像ファイル自体は加工せず、この座標を元にCSSのbackground-size/positionをキャラごとに計算し、
-// 透過余白の差(C:約33%〜SSS:約61%)を吸収して見た目の背丈を揃えるために使う。
+// 透過余白の差(Sランクのみ約56〜66%、他は約86%で統一)を吸収して見た目の背丈を揃えるために使う。
 const PORTRAIT_CANVAS_SIZE = 256;
 const PORTRAIT_BBOX = {
-    c_gail:       { x0: 93, y0: 77, x1: 169, y1: 174 },
-    c_roto:       { x0: 98, y0: 72, x1: 162, y1: 174 },
-    c_jin:        { x0: 90, y0: 73, x1: 163, y1: 174 },
-    c_popo:       { x0: 86, y0: 90, x1: 153, y1: 174 },
-    b_bardo:      { x0: 93, y0: 68, x1: 170, y1: 178 },
-    b_fiona:      { x0: 86, y0: 81, x1: 170, y1: 178 },
-    b_glen:       { x0: 86, y0: 77, x1: 170, y1: 178 },
-    b_lily:       { x0: 86, y0: 80, x1: 163, y1: 179 },
-    a_leon:       { x0: 93, y0: 65, x1: 170, y1: 190 },
-    a_elena:      { x0: 86, y0: 78, x1: 170, y1: 190 },
-    a_shion:      { x0: 86, y0: 64, x1: 170, y1: 191 },
-    a_valeria:    { x0: 86, y0: 47, x1: 163, y1: 191 },
-    s_kayen:      { x0: 88, y0: 43, x1: 170, y1: 196 },
-    s_mira:       { x0: 86, y0: 54, x1: 170, y1: 196 },
-    s_luna:       { x0: 86, y0: 72, x1: 170, y1: 196 },
-    s_zex:        { x0: 86, y0: 87, x1: 168, y1: 197 },
-    ss_asteria:   { x0: 90, y0: 56, x1: 170, y1: 196 },
-    ss_ignis:     { x0: 86, y0: 48, x1: 170, y1: 198 },
-    ss_morgana:   { x0: 86, y0: 55, x1: 170, y1: 196 },
-    ss_veil:      { x0: 86, y0: 81, x1: 162, y1: 197 },
-    sss_seraphy:  { x0: 78, y0: 41, x1: 184, y1: 189 },
-    sss_nocturne: { x0: 72, y0: 35, x1: 184, y1: 191 },
-    sss_eden:     { x0: 72, y0: 46, x1: 183, y1: 190 }
+    c_gail:       { x0: 39, y0: 18, x1: 217, y1: 238 },
+    c_roto:       { x0: 47, y0: 18, x1: 208, y1: 238 },
+    c_jin:        { x0: 46, y0: 18, x1: 209, y1: 238 },
+    c_popo:       { x0: 47, y0: 18, x1: 208, y1: 238 },
+    b_bardo:      { x0: 24, y0: 18, x1: 232, y1: 238 },
+    b_fiona:      { x0: 32, y0: 18, x1: 223, y1: 238 },
+    b_glen:       { x0: 32, y0: 18, x1: 223, y1: 238 },
+    b_lily:       { x0: 18, y0: 18, x1: 238, y1: 238 },
+    a_leon:       { x0: 30, y0: 18, x1: 225, y1: 238 },
+    a_elena:      { x0: 24, y0: 18, x1: 231, y1: 238 },
+    a_shion:      { x0: 29, y0: 18, x1: 227, y1: 238 },
+    a_valeria:    { x0: 26, y0: 18, x1: 230, y1: 238 },
+    s_kayen:      { x0: 43, y0: 46, x1: 215, y1: 208 },
+    s_mira:       { x0: 37, y0: 50, x1: 209, y1: 206 },
+    s_luna:       { x0: 66, y0: 55, x1: 222, y1: 196 },
+    s_zex:        { x0: 38, y0: 59, x1: 196, y1: 195 },
+    ss_asteria:   { x0: 34, y0: 18, x1: 222, y1: 238 },
+    ss_ignis:     { x0: 40, y0: 18, x1: 216, y1: 238 },
+    ss_morgana:   { x0: 38, y0: 18, x1: 217, y1: 238 },
+    ss_veil:      { x0: 34, y0: 18, x1: 221, y1: 238 },
+    sss_seraphy:  { x0: 48, y0: 18, x1: 207, y1: 238 },
+    sss_nocturne: { x0: 43, y0: 18, x1: 212, y1: 238 },
+    sss_eden:     { x0: 42, y0: 18, x1: 214, y1: 238 }
 };
 // 召喚結果ポートレートに、キャラごとのbboxを元にした background-size/position を適用する。
 // 画像は一切加工せず、CSSのcustom propertyだけを書き換えて表示上の背丈・足元位置を揃える。
@@ -1267,7 +1267,7 @@ function applyPortraitCrop(el, characterId) {
     const bbox = PORTRAIT_BBOX[characterId];
     if (!el || !bbox) return;
     const stage = el.closest('.summon-portrait-stage');
-    const cssTargetH = parseFloat(getComputedStyle(stage || document.documentElement).getPropertyValue('--portrait-target-h')) || 196;
+    const cssTargetH = parseFloat(getComputedStyle(stage || document.documentElement).getPropertyValue('--portrait-target-h')) || 240;
     // stage自身のoffsetHeightは、この時点でまだally本体のサイズが未確定のため信用できない
     // (flex:1がally挿入前の空の状態を基準に伸びてしまい、確定後のカード高さとズレて全身が
     // 枠外にはみ出すことがあった)。代わりに.summon-area(外側のflex列で高さが確定済み)から
