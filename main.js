@@ -697,9 +697,15 @@ function loadPartyData() {
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return;
         GameState.party = parsed.map(p => {
-            const spriteKind = p.job === '魔物' ? 'enemy' : 'ally';
-            const spriteKey = p.job === '魔物' ? (p.enemyTypeKey || 'slime') : (p.job || '裁断戦士');
-            return { ...p, sprite: new SpriteAnimator(spriteKind, spriteKey) };
+            if (p.job === '魔物') {
+                return { ...p, sprite: new SpriteAnimator('enemy', p.enemyTypeKey || 'slime') };
+            }
+            // 承認済みキャラ(characterId持ち)は本人専用のフィールド歩行素材を復元する。
+            // characterIdが無い旧セーブだけ、従来どおりjob基準の共通歩行素材にフォールバックする。
+            if (p.characterId && SPRITE_MANIFEST.ally_field && SPRITE_MANIFEST.ally_field.files[p.characterId]) {
+                return { ...p, sprite: new SpriteAnimator('ally_field', p.characterId) };
+            }
+            return { ...p, sprite: new SpriteAnimator('ally', p.job || '裁断戦士') };
         });
     } catch (e) { /* 壊れた保存データは無視して空のパーティのまま使う */ }
 }
@@ -3189,7 +3195,12 @@ document.getElementById('btn-summon').addEventListener('click', () => {
                 ? `✨${rankData.title}★ 超激レアの魂が舞い降りた！ ★${rankData.title}✨`
                 : '召喚成功！新しい仲間がパーティに加わった！';
 
-            const result = addOrEnhancePartyMember({ name: picked.name, job, rarity: rankData.key, style: itemStyle, color: picked.color, visualPath: allyVisual.path, characterId: picked.id, portraitPath: picked.portrait, isDragon: false, originItem: '時環召喚', sprite: new SpriteAnimator('ally', job) });
+            // 承認済み23人は本人専用のフィールド歩行素材(ally_field/characterId)を使う。
+            // 役職が同じ他キャラの画像を使い回さないよう、job基準の'ally'ではなくcharacterId基準で紐付ける。
+            const fieldSprite = (SPRITE_MANIFEST.ally_field && SPRITE_MANIFEST.ally_field.files[picked.id])
+                ? new SpriteAnimator('ally_field', picked.id)
+                : new SpriteAnimator('ally', job);
+            const result = addOrEnhancePartyMember({ name: picked.name, job, rarity: rankData.key, style: itemStyle, color: picked.color, visualPath: allyVisual.path, characterId: picked.id, portraitPath: picked.portrait, isDragon: false, originItem: '時環召喚', sprite: fieldSprite });
             shopMsg.innerHTML = result.merged
                 ? `${baseMsg}<br>💫 同じ魂が重なった！ Lv.${result.member.level} へ強化（攻撃+${result.member.atkBonusPct}%）`
                 : baseMsg;

@@ -2,10 +2,27 @@
   16-bit CSS Stylesheet for Z-SAGA: CHRONICLES RPG
 */
 * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
-body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monospace; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; margin: 0; }
+body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monospace; display: flex; justify-content: center; align-items: center; height: 100vh; height: 100dvh; overflow: hidden; margin: 0; }
 
+/* ゲーム画面本体。ステージ・戦闘の描画座標系(canvas.width/height=800x600)は一切変更しない。
+   表示サイズだけをGrid/Flex/aspect-ratioで画面幅に合わせる(transform:scaleは使わない)。
+   PC: 中央に大きく表示しつつ最大幅で間延びを防ぐ。スマホ: 100dvw/100dvhを基準に画面全体を使う。 */
 #game-container {
-  width: 800px; height: 600px; background-color: #000; border: 4px solid #fff; position: relative; overflow: hidden; image-rendering: pixelated; box-shadow: 0 0 20px rgba(0,255,255,0.3);
+  width: min(94vw, calc(94dvh * 4 / 3), 1000px);
+  aspect-ratio: 4 / 3;
+  background-color: #000; border: 4px solid #fff; position: relative; overflow: hidden; image-rendering: pixelated; box-shadow: 0 0 20px rgba(0,255,255,0.3);
+}
+#game-canvas { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; background: #000; }
+
+@media (max-width: 850px) {
+  body { padding: 0; }
+  #game-container {
+    width: 100dvw; height: 100dvh; max-width: none; aspect-ratio: auto; border: none; box-shadow: none;
+  }
+  /* スマホは画面全体(100dvw/100dvh)を使うため、4:3のレターボックス(黒帯)は作らず全面フィットさせる。
+     HUD・ダイアログは#game-container(=100dvw/100dvh)いっぱいに重なる設計のまま(構造は変えない)なので、
+     canvasだけ黒帯を作ると表示内容とHUDの位置がずれてしまうため、ここだけcontainではなくfillにする。 */
+  #game-canvas { object-fit: fill; }
 }
 
 .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; flex-direction: column; justify-content: center; align-items: center; }
@@ -31,15 +48,42 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 
 /* UI Overlay */
 #ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
-.top-bar { display: flex; justify-content: space-between; padding: 10px 20px; border-bottom: none; border-top: none; border-left: none; border-right: none; font-size: 20px; pointer-events: auto; margin: -4px -4px 0 -4px; }
+.top-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; border-bottom: none; border-top: none; border-left: none; border-right: none; font-size: 20px; pointer-events: auto; margin: -4px -4px 0 -4px; }
 .menu-btn-container { display: flex; gap: 8px; }
+/* スマホ: HUDを上部2段(HP/所持金の行 → 移動・召喚・メニューの行)に分け、横一列の詰め込みをやめる */
+@media (max-width: 850px) {
+  .top-bar {
+    flex-direction: column; align-items: stretch; gap: 4px;
+    padding: calc(env(safe-area-inset-top) + 6px) 8px 6px;
+    font-size: 14px;
+  }
+  .player-info { text-align: center; }
+  .menu-btn-container { justify-content: center; gap: 4px; flex-wrap: nowrap; }
+  .menu-btn-container .retro-btn.small-btn { flex: 1 1 0; min-width: 0; padding: 4px 2px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
 .social-feed { position: absolute; top: 80px; left: 15px; width: 320px; height: 100px; overflow: hidden; color: #ff66aa; font-weight: bold; font-size: 16px; }
+@media (max-width: 850px) {
+  .social-feed { top: 64px; left: 8px; width: min(320px, 60vw); font-size: 12px; height: 70px; }
+}
 #feed-list { list-style: none; margin: 0; padding: 0; }
 #feed-list li { margin-bottom: 6px; text-shadow: 2px 2px #000; }
 
 .dialog { pointer-events: auto; position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; text-align: center; font-size: 20px; line-height: 1.5; }
 #event-dialog { bottom: 5px; width: 50%; padding: 10px; font-size: 16px; pointer-events: none; }
-#status-menu { top: 80px; bottom: auto; height: 420px; display: flex; flex-direction: column; z-index: 50; }
+/* スマホ: 十字キー(左下)とフィールドメッセージ(その右側の残り幅で中央寄せ)が重ならないようにする */
+@media (max-width: 850px) {
+  #event-dialog {
+    left: auto; right: max(8px, env(safe-area-inset-right)); transform: none;
+    width: calc(100% - 132px - env(safe-area-inset-left) - max(8px, env(safe-area-inset-right)));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    font-size: 12px; line-height: 1.35; padding: 6px 8px;
+    max-height: 96px; overflow-y: auto; word-break: break-word;
+  }
+}
+#status-menu { top: 10%; bottom: auto; height: 82%; max-height: 480px; display: flex; flex-direction: column; z-index: 50; }
+@media (max-width: 850px) {
+  #status-menu { top: max(8px, env(safe-area-inset-top)); height: auto; bottom: max(8px, env(safe-area-inset-bottom)); max-height: none; width: 94%; padding: 12px; }
+}
 .status-content { text-align: left; margin-top: 15px; overflow-y: auto; flex-grow: 1; }
 .status-content hr { border-color: #55aaff; margin: 15px 0; }
 .status-content ul { list-style: square inside; color: #00e5ff; }
@@ -119,6 +163,10 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
     grid-template-columns: repeat(2, minmax(0,1fr)); max-height: 160px;
   }
   #battle-dialog #battle-msg { bottom: 168px; }
+  /* スマホはHUDが上部2段になり縦に高くなるため、戦闘中の敵HUD・敵名・敵HPバーをその分だけ下げて重なりを防ぐ */
+  #battle-dialog #battle-hud { top: calc(env(safe-area-inset-top) + 108px); }
+  #battle-dialog #battle-monster-name { top: calc(env(safe-area-inset-top) + 138px); }
+  #battle-dialog .enemy-hp-container { top: calc(env(safe-area-inset-top) + 176px); }
 }
 .hidden { display: none !important; }
 
@@ -347,7 +395,11 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 }
 
 @media (max-width: 850px) {
-  #virtual-dpad { opacity: 0.8; }
+  #virtual-dpad {
+    opacity: 0.8;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: max(12px, env(safe-area-inset-left));
+  }
 }
 
 /* 戦闘中・メニュー(ステータス)・召喚(時環観測室)の間は仮想十字キーを完全に隠す。
@@ -444,7 +496,7 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 }
 .pf-slot-leader-badge { position: absolute; top: 3px; right: 3px; font-size: 10px; color: #ffe673; text-shadow: 1px 1px #000; z-index: 2; }
 .pf-slot-portrait { width: 100%; height: 84px; background-repeat: no-repeat; image-rendering: pixelated; background-color: transparent; }
-.pf-slot-name { font-size: 10px; width: 100%; text-align: center; background: rgba(0,0,0,.55); color: #fff; padding: 1px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf-slot-name { font-size: 10px; width: 100%; text-align: center; background: rgba(0,0,0,.55); color: #fff; padding: 1px 2px; white-space: normal; overflow-wrap: break-word; line-height: 1.2; }
 .pf-slot-empty-label { color: #6b8fa3; font-size: 12px; text-align: center; padding: 0 4px; }
 .pf-slot-rank-badge { position: absolute; bottom: 20px; right: 3px; font-size: 9px; padding: 1px 3px; border-radius: 2px; background: rgba(0,0,0,.6); color: #ffd45a; z-index: 2; }
 
@@ -468,7 +520,7 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .pf-roster-grid { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(66px, 1fr)); gap: 5px; align-content: start; }
 .pf-roster-card {
   position: relative; border: 2px solid #3d6b86; border-radius: 3px; background: #020711; cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; padding: 2px; aspect-ratio: 1 / 1.12;
+  display: flex; flex-direction: column; align-items: center; padding: 2px 2px 4px; min-height: 0;
 }
 .pf-roster-card.pf-rarity-c { border-color: #6b7b83; }
 .pf-roster-card.pf-rarity-b { border-color: #95a5a6; }
@@ -478,8 +530,8 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .pf-roster-card.pf-rarity-sss { border-color: #f1c40f; box-shadow: 0 0 8px rgba(241,196,15,.6); }
 .pf-roster-card.pf-rarity-hero { border-color: #e9d9a4; box-shadow: 0 0 8px rgba(233,217,164,.55); }
 .pf-roster-card.is-selected { outline: 2px solid #fff; outline-offset: 1px; }
-.pf-roster-card .pf-card-portrait { width: 100%; flex: 1 1 auto; background-repeat: no-repeat; image-rendering: pixelated; min-height: 0; }
-.pf-roster-card .pf-card-name { font-size: 9px; width: 100%; text-align: center; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf-roster-card .pf-card-portrait { width: 100%; height: 64px; flex: 0 0 64px; background-repeat: no-repeat; image-rendering: pixelated; }
+.pf-roster-card .pf-card-name { font-size: 9px; width: 100%; text-align: center; color: #fff; white-space: normal; overflow-wrap: break-word; line-height: 1.2; margin-top: 2px; }
 .pf-roster-card .pf-card-rank { position: absolute; top: 1px; left: 1px; font-size: 8px; padding: 0 3px; background: rgba(0,0,0,.65); color: #ffd45a; border-radius: 2px; z-index: 2; }
 .pf-roster-card .pf-card-check { position: absolute; top: 1px; right: 1px; width: 14px; height: 14px; line-height: 14px; text-align: center; font-size: 9px; background: #2ecc71; color: #05170a; border-radius: 50%; z-index: 2; }
 .pf-roster-card .pf-card-new { position: absolute; bottom: 12px; left: 1px; font-size: 8px; padding: 0 3px; background: #ff2ee6; color: #fff; border-radius: 2px; z-index: 2; animation: sss-glow .7s ease-in-out infinite alternate; }
@@ -498,12 +550,19 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .pf-swap-grid button { font-size: 10px; padding: 4px 2px; }
 
 @media (max-width: 850px) {
-  .pf-body { flex-direction: column; overflow-y: auto; }
+  #party-formation-screen { padding: 8px 10px; }
+  .pf-body { flex-direction: column; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .pf-roster-col { flex: 0 0 auto; }
-  .pf-roster-grid { overflow-y: visible; max-height: none; }
+  .pf-roster-grid { overflow-y: visible; max-height: none; grid-template-columns: repeat(3, 1fr); }
   .pf-detail-col { max-width: none; flex: 0 0 auto; }
-  .pf-slot { height: 84px; }
+  .pf-slot { height: 96px; }
   .pf-slot-portrait { height: 62px; }
+  .pf-filter-btn { display: inline-flex; align-items: center; justify-content: center; padding: 4px 8px; }
+  .pf-filter-label { width: auto; margin-right: 2px; }
+}
+/* さらに狭い画面(375〜420px程度のスマホ)ではキャラ一覧を2列にする */
+@media (max-width: 420px) {
+  .pf-roster-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* Ending */

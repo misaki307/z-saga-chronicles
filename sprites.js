@@ -63,6 +63,37 @@ const SPRITE_MANIFEST = {
             '裁断戦士': 'assets/sprites/ally/ally_warrior.png'
         }
     },
+    // ガチャで仲間になる23人専用のフィールド歩行素材。characterIdごとに個別のPNGを持ち、
+    // 役職(job)が同じでも他キャラの画像を使い回さない。本人の透過portraitから生成した
+    // 仮素材(足踏み・上下の揺れあり、左右は反転で表現)。cell/rows/actionsは既存allyと同じ形式。
+    ally_field: {
+        cell: 48, rows: 4, actions: ALLY_ACTIONS,
+        files: {
+            c_gail: 'assets/sprites/field/c_gail.png',
+            c_roto: 'assets/sprites/field/c_roto.png',
+            c_jin: 'assets/sprites/field/c_jin.png',
+            c_popo: 'assets/sprites/field/c_popo.png',
+            b_bardo: 'assets/sprites/field/b_bardo.png',
+            b_fiona: 'assets/sprites/field/b_fiona.png',
+            b_glen: 'assets/sprites/field/b_glen.png',
+            b_lily: 'assets/sprites/field/b_lily.png',
+            a_leon: 'assets/sprites/field/a_leon.png',
+            a_elena: 'assets/sprites/field/a_elena.png',
+            a_shion: 'assets/sprites/field/a_shion.png',
+            a_valeria: 'assets/sprites/field/a_valeria.png',
+            s_kayen: 'assets/sprites/field/s_kayen.png',
+            s_mira: 'assets/sprites/field/s_mira.png',
+            s_luna: 'assets/sprites/field/s_luna.png',
+            s_zex: 'assets/sprites/field/s_zex.png',
+            ss_asteria: 'assets/sprites/field/ss_asteria.png',
+            ss_ignis: 'assets/sprites/field/ss_ignis.png',
+            ss_morgana: 'assets/sprites/field/ss_morgana.png',
+            ss_veil: 'assets/sprites/field/ss_veil.png',
+            sss_seraphy: 'assets/sprites/field/sss_seraphy.png',
+            sss_nocturne: 'assets/sprites/field/sss_nocturne.png',
+            sss_eden: 'assets/sprites/field/sss_eden.png'
+        }
+    },
     enemy: {
         rows: 1, actions: ENEMY_ACTIONS,
         files: {
