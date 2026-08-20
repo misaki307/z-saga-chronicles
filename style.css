@@ -52,6 +52,11 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 /* アステア専用ポートレート(party_special_actions.png 1536x1024, 6列×3行)の先頭コマだけを表示する */
 .is-asteria-portrait { background-size:600% 300% !important; background-position:0 0 !important; }
 .role-mage { color:#ff65d5; } .role-archer { color:#e9e33d; } .role-warrior { color:#ff7143; }
+/* 承認済み23人の本人portrait(256x256透過PNG)。歩行スプライトシートとは別の実画像として表示する。 */
+.character-portrait { display:inline-block; width:48px; height:48px; flex:0 0 48px; object-fit:contain; image-rendering:pixelated; background:transparent; }
+.character-portrait-thumb { width:32px; height:32px; flex:0 0 32px; object-fit:contain; image-rendering:pixelated; background:transparent; vertical-align:middle; margin-right:6px; }
+/* 召喚結果(.summoned-ally)を本人portraitで表示する時だけ、スプライトシート切り出しをやめて全身を等比表示する */
+.summoned-ally.is-portrait-image { background-size:contain !important; background-position:center !important; background-repeat:no-repeat !important; }
 
 /* Battle Elements */
 .monster-name { color: #ffaa00; font-size: 26px; margin-bottom: 10px; }
@@ -132,6 +137,9 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 @keyframes shake { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(5px, 5px); } 50% { transform: translate(-5px, -5px); } 75% { transform: translate(5px, -5px); } }
 
 /* Shop / Gacha */
+/* 召喚結果キャラクターの表示高さの目安。画面幅に応じて自動調整する(画像自体は加工しない)。 */
+:root { --portrait-target-h: 196px; }
+@media (max-width: 850px) { :root { --portrait-target-h: 175px; } }
 #shop-screen {
   top: 4%; bottom: auto; width: 92%; height: 92%; padding: 12px 16px;
   display: flex; flex-direction: column; overflow: hidden; z-index: 80;
@@ -140,10 +148,11 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 }
 .summon-title { color:#fff2bd; letter-spacing:4px; text-shadow:3px 3px #07101e,0 0 12px #21ddec; }
 #shop-msg { min-height: 50px; position:relative; z-index:7; font-size:16px; }
-.summon-area { margin: 5px auto; width: 100%; flex:1; min-height: 330px; position: relative; overflow:hidden; border:3px solid #5bcce0; background:#020711; box-shadow:inset 0 0 20px #000; }
+.summon-area { margin: 5px auto; width: 100%; flex:1; min-height: 260px; position: relative; overflow:hidden; border:3px solid #5bcce0; background:#020711; box-shadow:inset 0 0 20px #000; }
 .summon-altar-bg { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; image-rendering:pixelated; filter:saturate(.92) brightness(.72); }
 .summon-area::after { content:""; position:absolute; inset:0; pointer-events:none; background:radial-gradient(ellipse at center, transparent 0 28%, rgba(0,4,24,.1) 46%, rgba(0,2,14,.76) 100%); }
 .summon-area::before { content:""; position:absolute; inset:0; z-index:2; pointer-events:none; opacity:0; }
+.summon-area.summon-rank-c { border-color:#5d6b73; } /* Bより控えめ(演出オーバーレイなし) */
 .summon-area.summon-rank-b { border-color:#78909c; }
 .summon-area.summon-rank-b::before { opacity:.18; background:radial-gradient(circle at center,#a8c5d0,transparent 34%); }
 .summon-area.summon-rank-a { border-color:#45b8ff; box-shadow:inset 0 0 25px #0b5f91,0 0 8px #45b8ff; }
@@ -175,27 +184,45 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .summoning #orbit-shards { opacity:1; animation:shard-pulse .55s ease-in-out infinite alternate; }
 @keyframes shard-float { to{margin-top:-20px;filter:drop-shadow(0 0 14px #b26cff) brightness(1.4)} }
 @keyframes shard-pulse { to{filter:brightness(1.6)} }
-#summon-result { position:absolute; z-index:8; left:50%; bottom:6px; transform:translateX(-50%); width:94%; pointer-events:none; }
-.gacha-reveal { display:flex; flex-direction:column; justify-content:center; align-items:center; gap:8px; animation:ally-reveal .55s cubic-bezier(.16,.88,.25,1.3); }
-.summoned-ally { width:118px; height:118px; flex:0 0 118px; background-image:var(--ally-sprite); background-size:1200% 400%; background-position:0 0; background-repeat:no-repeat; image-rendering:pixelated; filter:drop-shadow(0 0 10px currentColor); }
+#summon-result { position:absolute; z-index:8; left:50%; top:0; bottom:4px; transform:translateX(-50%); width:94%; pointer-events:none; }
+.gacha-reveal { height:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:2px; animation:ally-reveal .55s cubic-bezier(.16,.88,.25,1.3); }
+/* ポートレートの表示枠。ランクに関わらず高さを固定し、下端(足元)をここへ揃える(魔法陣の位置と合わせた基準線)。
+   これにより大きさがランクごとに違っても、キャラクターの立ち位置が上下にずれて見えることがなくなる。
+   高さは --portrait-target-h (画面幅に応じて自動調整) に統一する。 */
+.summon-portrait-stage { position:relative; width:100%; flex:1 1 auto; min-height:0; max-height:var(--portrait-target-h,196px); display:flex; align-items:flex-end; justify-content:center; }
+/* 召喚結果ポートレート専用: 画像は加工せず、キャラごとの実絵柄範囲(bbox)に合わせて
+   background-size/positionをJSで計算し、透明余白を吸収して見た目の背丈を揃える。 */
+.summon-portrait-stage .summoned-ally.is-portrait-image {
+  background-size: var(--bg-w) var(--bg-h) !important;
+  background-position: var(--bg-x) var(--bg-y) !important;
+}
+.summoned-ally { width:140px; height:140px; flex:0 0 140px; background-image:var(--ally-sprite); background-size:1200% 400%; background-position:0 0; background-repeat:no-repeat; image-rendering:pixelated; filter:drop-shadow(0 0 10px currentColor); }
 .gacha-reveal.role-mage .summoned-ally { filter:drop-shadow(0 0 11px #ff57d3) drop-shadow(0 0 20px #9d42e8); }
 .gacha-reveal.role-archer .summoned-ally { filter:drop-shadow(0 0 11px #fff15b) drop-shadow(0 0 20px #79d640); }
 .gacha-reveal.role-warrior .summoned-ally { filter:drop-shadow(0 0 11px #ff7a3d) drop-shadow(0 0 20px #d9332e); }
 .gacha-reveal.rank-ss .summoned-ally { animation:rare-float .75s ease-in-out infinite alternate; }
 .gacha-reveal.rank-sss .summoned-ally { animation:rare-float .55s ease-in-out infinite alternate; filter:drop-shadow(0 0 12px #fff) drop-shadow(0 0 24px #ffe45d) drop-shadow(0 0 38px #d75cff); }
 
-/* 召喚結果: 仲間のスプライトを画面中央へ大きく表示する。レアリティが高いほど大きい */
+/* 召喚結果: 仲間のスプライトを画面中央へ大きく表示する。レアリティが高いほど大きい(足元は常に揃う)。 */
 .summoned-ally.big { transition: filter .45s ease; }
-.gacha-reveal.rank-b .summoned-ally.big { width:150px; height:150px; flex-basis:150px; }
-.gacha-reveal.rank-a .summoned-ally.big { width:168px; height:168px; flex-basis:168px; }
-.gacha-reveal.rank-s .summoned-ally.big { width:190px; height:190px; flex-basis:190px; }
-.gacha-reveal.rank-ss .summoned-ally.big { width:212px; height:212px; flex-basis:212px; }
-.gacha-reveal.rank-sss .summoned-ally.big { width:236px; height:236px; flex-basis:236px; }
+.gacha-reveal.rank-c .summoned-ally.big { width:145px; height:145px; flex-basis:145px; }
+.gacha-reveal.rank-b .summoned-ally.big { width:170px; height:170px; flex-basis:170px; }
+.gacha-reveal.rank-a .summoned-ally.big { width:190px; height:190px; flex-basis:190px; }
+.gacha-reveal.rank-s .summoned-ally.big { width:212px; height:212px; flex-basis:212px; }
+.gacha-reveal.rank-ss .summoned-ally.big { width:234px; height:234px; flex-basis:234px; }
+.gacha-reveal.rank-sss .summoned-ally.big { width:256px; height:256px; flex-basis:256px; }
 /* S以上のみ: カットインを挟むまでは黒いシルエットのまま登場させる */
 .summoned-ally.big.silhouette { filter: brightness(0) drop-shadow(0 0 24px rgba(255,255,255,.9)) !important; animation: none !important; }
 @keyframes ally-reveal { from{transform:translateY(35px) scale(.35);opacity:0} to{transform:none;opacity:1} }
 @keyframes rare-float { to{transform:translateY(-8px) scale(1.04)} }
 @keyframes spin { 100% { transform: rotate(360deg); } }
+
+/* ランクが上がるほど数・大きさ・色が豪華になる、公開時の一瞬の光の粒 */
+.reveal-spark { position:absolute; left:50%; top:50%; width:var(--spark-size,6px); height:var(--spark-size,6px); margin:calc(var(--spark-size,6px) / -2); border-radius:50%; background:var(--spark-color,#fff); box-shadow:0 0 6px var(--spark-color,#fff); pointer-events:none; opacity:0; animation:spark-burst var(--spark-dur,.7s) ease-out forwards; animation-delay:var(--spark-delay,0s); }
+@keyframes spark-burst { 0%{ transform:translate(0,0) scale(.3); opacity:1; } 100%{ transform:translate(var(--spark-x,0),var(--spark-y,0)) scale(1); opacity:0; } }
+/* ランクアップ演出: 公開の瞬間に広がるリング(ランクごとに色・大きさが変わる) */
+.reveal-ring { position:absolute; left:50%; top:100%; width:10px; height:10px; margin:-5px; border-radius:50%; border:3px solid var(--ring-color,#fff); pointer-events:none; opacity:0; animation:ring-expand .6s ease-out forwards; }
+@keyframes ring-expand { 0%{ transform:translate(-50%,-50%) scale(0); opacity:.9; } 100%{ transform:translate(-50%,-50%) scale(var(--ring-scale,14)); opacity:0; } }
 
 #flash-effect { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 15; pointer-events: none; opacity: 0; }
 .flash-sss { animation: flash-sss-kf 2.5s ease-out; background: conic-gradient(from 0deg, #fff, #f1c40f, #ff2ee6, #3498db, #fff); }
@@ -222,9 +249,12 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 @keyframes pulse-charge { 0% { transform: scale(1); } 100% { transform: scale(1.15); } }
 
 /* 召喚結果カード: ランク(B/A/S/SS/SSS)に応じた登場演出 */
-.gacha-card { padding: 8px 20px; border-radius: 4px; display: inline-block; min-width:280px; background:rgba(2,5,22,.92); animation: card-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+.gacha-card { position:relative; padding: 4px 14px; border-radius: 4px; display: inline-block; min-width:280px; background:rgba(2,5,22,.92); animation: card-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
 @keyframes card-pop { 0% { transform: scale(0.3) rotate(-8deg); opacity: 0; } 60% { transform: scale(1.15) rotate(3deg); opacity: 1; } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
-.gacha-rank { font-size: 26px; font-weight: bold; color: #f1c40f; text-shadow: 2px 2px #000; letter-spacing: 2px; }
+.gacha-rank { font-size: 26px; font-weight: bold; color: #f1c40f; text-shadow: 2px 2px #000; letter-spacing: 2px; line-height:1.05; margin-bottom:1px; }
+.gacha-card h3 { line-height:1.05; margin-top:2px !important; }
+.gacha-card small { line-height:1.05; display:inline-block; }
+.rarity-c { border: 1px solid #6b7b83; box-shadow: none; } /* Bより控えめ(縁のみ・発光なし) */
 .rarity-b { border: 2px solid #95a5a6; box-shadow: 0 0 6px #95a5a6; }
 .rarity-a { border: 2px solid #3498db; box-shadow: 0 0 10px #3498db; }
 .rarity-s { border: 2px solid #2ecc71; box-shadow: 0 0 16px #2ecc71; }
@@ -238,6 +268,27 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 }
 @keyframes ss-glow { 0% { box-shadow: 0 0 16px #9b59b6; } 100% { box-shadow: 0 0 32px #fff, 0 0 48px #9b59b6; } }
 @keyframes sss-glow { 0% { box-shadow: 0 0 20px #f1c40f; } 100% { box-shadow: 0 0 40px #fff, 0 0 65px #f1c40f, 0 0 90px #ff2ee6; } }
+/* SS/SSS限定: 称号と縁取りをより豪華に見せる(既存のランク別演出・確率・データには一切影響しない表示上の装飾) */
+.rarity-ss::before, .rarity-sss::before {
+  content:""; position:absolute; inset:-3px; z-index:-1; border-radius:6px; opacity:.85;
+  background-size:300% 300%; animation:card-border-flow 3s linear infinite;
+}
+.rarity-ss::before { background-image:linear-gradient(120deg,#d16cff,#58ddff,#d16cff); }
+.rarity-sss::before { background-image:linear-gradient(120deg,#ffe673,#ff2ee6,#66efff,#ffe673); }
+@keyframes card-border-flow { 0%{background-position:0% 50%} 100%{background-position:300% 50%} }
+.rarity-ss .gacha-rank {
+  background:linear-gradient(180deg,#fff 10%,#e6c2ff 45%,#9b59b6 90%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  text-shadow:none; filter:drop-shadow(2px 2px 0 #000) drop-shadow(0 0 8px #9b59b6);
+  letter-spacing:4px;
+}
+.rarity-sss .gacha-rank {
+  font-size:28px;
+  background:linear-gradient(180deg,#fff 5%,#ffe98a 35%,#f1c40f 65%,#ff8a3d 100%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  text-shadow:none; filter:drop-shadow(2px 2px 0 #000) drop-shadow(0 0 10px #f1c40f) drop-shadow(0 0 16px #ff2ee6);
+  letter-spacing:5px;
+}
 
 /* 召喚の祭壇: SSSカットイン専用の金色ストライプ */
 .sss-cutin .cutin-stripe { background: rgba(241, 196, 15, 0.85); box-shadow: 0 0 30px #f1c40f; }

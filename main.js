@@ -673,6 +673,35 @@ function loadWorldProgress() {
 }
 loadWorldProgress();
 
+// ==========================================
+// 仲間パーティの永続化(localStorage、新規キー。既存のzsaga_world_progress_v1は変更しない)
+// characterId・portraitPath・Lv・重複強化値などを保存し、リロード後も同じ仲間が残るようにする。
+// spriteはJSON化できないため保存せず、読み込み時に毎回作り直す。
+// ==========================================
+const PARTY_DATA_KEY = 'zsaga_party_v1';
+function savePartyData() {
+    try {
+        const plain = GameState.party.map(p => {
+            const { sprite, ...rest } = p; // spriteだけ除いた純データを保存する
+            return rest;
+        });
+        localStorage.setItem(PARTY_DATA_KEY, JSON.stringify(plain));
+    } catch (e) { /* 保存できない環境では無視 */ }
+}
+function loadPartyData() {
+    try {
+        const raw = localStorage.getItem(PARTY_DATA_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return;
+        GameState.party = parsed.map(p => {
+            const spriteKind = p.job === '魔物' ? 'enemy' : 'ally';
+            const spriteKey = p.job === '魔物' ? (p.enemyTypeKey || 'slime') : (p.job || '裁断戦士');
+            return { ...p, sprite: new SpriteAnimator(spriteKind, spriteKey) };
+        });
+    } catch (e) { /* 壊れた保存データは無視して空のパーティのまま使う */ }
+}
+
 // フィールド背景画像の先読み(SPRITE_MANIFESTと同様、パス・並び順はfield-expansion.jsのものをそのまま使う)
 const FIELD_BG_IMAGES = {};
 (function preloadFieldBackgrounds() {
@@ -1125,18 +1154,20 @@ function updateGold(amount) {
     document.getElementById('menu-gold').textContent = GameState.gold;
 }
 
-const ALL_STYLES = ['炎', '氷', '雷', '光', '闇', '草', '水'];
-// 属性の三すくみ(火は草に強い→草は水に強い→水は火に強い)。既存の"炎"を火属性として扱う。
-// この3属性同士の組み合わせだけで有利・不利が発生し、氷・雷・光・闇はこれまで通り無属性(等倍)のまま。
-const ELEMENT_ADVANTAGE = { '炎': '草', '草': '水', '水': '炎' };
+const ALL_STYLES = ['炎', '氷', '雷', '光', '闇']; // 新属性は増やさない(承認済みキャラクター仕様に合わせる)
+// 属性の一方向循環: 炎→氷→雷→光→闇→炎。既存の敵障壁・通常耐性・スキル計算はそのまま、
+// この関数の戻り値を最終倍率として1回だけ掛けて重複適用しない。
+const ELEMENT_ADVANTAGE = { '炎': '氷', '氷': '雷', '雷': '光', '光': '闇', '闇': '炎' };
 // 攻撃側の属性(attackerStyle)が防御側の属性(defenderStyle)に有利/不利かでダメージ倍率を返す。
 // 既存の「属性一致連携(Perfect Fit)」とは別の仕組みで、通常攻撃・仲間の攻撃・敵の反撃すべてに適用する。
 function getElementMultiplier(attackerStyle, defenderStyle) {
     if (!attackerStyle || !defenderStyle) return 1;
-    if (ELEMENT_ADVANTAGE[attackerStyle] === defenderStyle) return 1.5; // 有利属性
-    if (ELEMENT_ADVANTAGE[defenderStyle] === attackerStyle) return 0.7; // 不利属性
+    if (ELEMENT_ADVANTAGE[attackerStyle] === defenderStyle) return 1.25; // 有利属性
+    if (ELEMENT_ADVANTAGE[defenderStyle] === attackerStyle) return 0.85; // 不利属性
     return 1; // それ以外(同属性・無関係属性)は等倍
 }
+// 属性名の表示色(召喚結果・仲間一覧・ステータス・戦闘画面で共通して使う)
+const STYLE_COLORS = { '炎': '#e74c3c', '氷': '#5dc8e8', '雷': '#f1c40f', '光': '#fff2a8', '闇': '#8e5bd6' };
 const JOB_TEMPLATES = [
     { type: '影縫いの外套', job: '仕立騎士', style: '闇', color: '#2b2038', prefix: '影縫いの' },
     { type: '純白の星布', job: '染織師', style: '光', color: '#eeeeee', prefix: '純白の' },
@@ -1163,46 +1194,163 @@ function analyzeImageFast() {
     });
 }
 
-// 召喚の祭壇：ランク別キャラクタープール（B/A/S/SS/SSSの5段階）
-const CHARACTER_POOL = {
-    SSS: [
-        { name: '王室仕立師・セラフィ', color: '#ffd700' },
-        { name: '千色の染織王・ノクターン', color: '#ff2ee6' },
-        { name: '星布の創始者・エデン', color: '#e74c3c' }
-    ],
-    SS: [
-        { name: '虹染めの術師・アステア', color: '#e85bb5' },
-        { name: '深紅の染色術師・イグニス', color: '#e74c3c' },
-        { name: '夜布の染色術師・モルガナ', color: '#9b59b6' }
-    ],
-    S: [
-        { name: '黄金尺の採寸弓師・カイエン', color: '#c9c429' },
-        { name: '月尺の採寸弓師・ミラ', color: '#94ad24' },
-        { name: '若葉布の採寸弓師・ルーナ', color: '#78a52a' },
-        { name: '早縫いの採寸弓師・ゼクス', color: '#aebd31' }
-    ],
-    A: [
-        { name: '手練れの裁断戦士・ガロ', color: '#e85a2b' },
-        { name: '荒布の裁断戦士・ディーン', color: '#d66a32' },
-        { name: '鉄釦の裁断戦士・ブロード', color: '#c74a29' },
-        { name: '双鋏の裁断戦士・カイル', color: '#ef7733' }
-    ],
-    B: [
-        { name: '街角の裁断戦士・ガイル', color: '#b85d3b' },
-        { name: '見習い縫い手・ロト', color: '#9e684d' },
-        { name: '旅する繕い手・ジン', color: '#bd7852' },
-        { name: '新米仕立屋・ポポ', color: '#a46f58' }
-    ]
-};
+// 召喚の祭壇: ユーザー承認済みキャラクター23人（C4/B4/A4/S4/SS4/SSS3）。
+// id・job・weapon・style・portrait(256x256透過PNG)・colorはcharacters.jsonの正式データをそのまま使う。
+// SSSはセラフィ・ノクターン・エデンの既存3人を維持しつつportraitを紐付け、
+// SSはアステア・イグニス・モルガナの既存3人(Lv等は維持)に新規のヴェイルを追加する。
+const CHARACTER_ROSTER = [
+    { id: 'c_gail', rank: 'C', name: '街角の裁断戦士・ガイル', job: '裁断戦士', weapon: '大裁ち鋏', style: '炎', portrait: 'assets/portraits/C/gail.png', color: '#a95d37' },
+    { id: 'c_roto', rank: 'C', name: '見習い縫い手・ロト', job: '縫い手', weapon: '長針の杖', style: '光', portrait: 'assets/portraits/C/roto.png', color: '#d6c39f' },
+    { id: 'c_jin', rank: 'C', name: '旅する繕い手・ジン', job: '繕い手', weapon: '糸鉤', style: '雷', portrait: 'assets/portraits/C/jin.png', color: '#b96735' },
+    { id: 'c_popo', rank: 'C', name: '新米仕立屋・ポポ', job: '仕立屋', weapon: '布槌', style: '雷', portrait: 'assets/portraits/C/popo.png', color: '#bd687b' },
 
-// レア度が高いほど強いジョブが出るようにし、抽選演出の派手さも段階的に変える
-const RARITY_TABLE = [
-    { key: 'SSS', cum: 0.01, job: '染色術師', flashClass: 'flash-sss', shakeLv: 4, buildupMs: 2800, sfx: 'gachasss', fanfare: 'fanfareEpic', title: 'SSS' },
-    { key: 'SS', cum: 0.05, job: '染色術師', flashClass: 'flash-ss', shakeLv: 3, buildupMs: 2200, sfx: 'gachalegend', fanfare: 'fanfareGrand', title: 'SS' },
-    { key: 'S', cum: 0.20, job: '採寸弓師', flashClass: 'flash-s', shakeLv: 2, buildupMs: 1700, sfx: 'gacha', fanfare: 'fanfareGrand', title: 'S' },
-    { key: 'A', cum: 0.50, job: '裁断戦士', flashClass: 'flash-a', shakeLv: 1, buildupMs: 1200, sfx: 'gacha', fanfare: 'fanfare', title: 'A' },
-    { key: 'B', cum: 1.00, job: '裁断戦士', flashClass: 'flash-b', shakeLv: 0, buildupMs: 700, sfx: 'select', fanfare: 'fanfare', title: 'B' }
+    { id: 'b_bardo', rank: 'B', name: '鋏剣士・バルド', job: '鋏剣士', weapon: '鋏大剣', style: '炎', portrait: 'assets/portraits/B/bardo.png', color: '#9d3e32' },
+    { id: 'b_fiona', rank: 'B', name: '糸占い師・フィオナ', job: '糸占い師', weapon: '紡錘振り子', style: '氷', portrait: 'assets/portraits/B/fiona.png', color: '#3b8e91' },
+    { id: 'b_glen', rank: 'B', name: '釦盾士・グレン', job: '釦盾士', weapon: '大釦盾', style: '雷', portrait: 'assets/portraits/B/glen.png', color: '#6f7742' },
+    { id: 'b_lily', rank: 'B', name: '布舞い・リリィ', job: '布舞士', weapon: '布刃リボン', style: '闇', portrait: 'assets/portraits/B/lily.png', color: '#9b67b7' },
+
+    { id: 'a_leon', rank: 'A', name: '黒鋏の剣士・レオン', job: '黒鋏剣士', weapon: '鋏レイピア', style: '闇', portrait: 'assets/portraits/A/leon.png', color: '#ad3041' },
+    { id: 'a_elena', rank: 'A', name: '白絹の縫術師・エレナ', job: '白絹縫術師', weapon: '銀針扇', style: '光', portrait: 'assets/portraits/A/elena.png', color: '#dbeaf2' },
+    { id: 'a_shion', rank: 'A', name: '蒼布の追跡者・シオン', job: '蒼布追跡者', weapon: '糸巻き弩', style: '氷', portrait: 'assets/portraits/A/shion.png', color: '#29477d' },
+    { id: 'a_valeria', rank: 'A', name: '紅釦の騎士・ヴァレリア', job: '紅釦騎士', weapon: '縫い目裂き槍', style: '炎', portrait: 'assets/portraits/A/valeria.png', color: '#8d3344' },
+
+    { id: 's_kayen', rank: 'S', name: '黄金裁騎・カイエン', job: '黄金裁騎', weapon: '双刃裁ち鋏', style: '雷', portrait: 'assets/portraits/S/kayen.png', color: '#d9a22d' },
+    { id: 's_mira', rank: 'S', name: '月紡ぎの賢女・ミラ', job: '月紡ぎ賢女', weapon: '月糸巻き杖', style: '氷', portrait: 'assets/portraits/S/mira.png', color: '#9dbbea' },
+    { id: 's_luna', rank: 'S', name: '若葉布舞・ルーナ', job: '若葉布舞', weapon: '双布戦扇', style: '光', portrait: 'assets/portraits/S/luna.png', color: '#4da85c' },
+    { id: 's_zex', rank: 'S', name: '閃針のゼクス', job: '閃針士', weapon: '双糸針', style: '闇', portrait: 'assets/portraits/S/zex.png', color: '#247985' },
+
+    { id: 'ss_asteria', rank: 'SS', name: '虹染めの術師・アステア', job: '虹染術師', weapon: '虹染料の筆槍', style: '光', portrait: 'assets/portraits/SS/asteria.png', color: '#e85bb5' },
+    { id: 'ss_ignis', rank: 'SS', name: '深紅の染色術師・イグニス', job: '深紅染術師', weapon: '蒸気アイロン大槌', style: '炎', portrait: 'assets/portraits/SS/ignis.png', color: '#e74c3c' },
+    { id: 'ss_morgana', rank: 'SS', name: '夜布の染色術師・モルガナ', job: '夜布染術師', weapon: '糸車の大鎌', style: '闇', portrait: 'assets/portraits/SS/morgana.png', color: '#9b59b6' },
+    { id: 'ss_veil', rank: 'SS', name: '銀型紙の魔導侯・ヴェイル', job: '型紙魔導侯', weapon: '型紙魔導書と六銀針', style: '氷', portrait: 'assets/portraits/SS/veil.png', color: '#b9d8ef' },
+
+    { id: 'sss_seraphy', rank: 'SSS', name: '王室仕立師・セラフィ', job: '王室仕立師', weapon: '王針と金糸', style: '光', portrait: 'assets/portraits/SSS/seraphy.png', color: '#ffd45a' },
+    { id: 'sss_nocturne', rank: 'SSS', name: '千色の染織王・ノクターン', job: '染織王', weapon: '千色織機', style: '闇', portrait: 'assets/portraits/SSS/nocturne.png', color: '#ee55d8' },
+    { id: 'sss_eden', rank: 'SSS', name: '星布の創始者・エデン', job: '星布創始者', weapon: '星布の刃', style: '炎', portrait: 'assets/portraits/SSS/eden.png', color: '#e24e58' }
 ];
+// ランクごとに抽出したプール(既存コードのCHARACTER_POOL[rankData.key]呼び出しをそのまま使えるようにする)
+const CHARACTER_POOL = { C: [], B: [], A: [], S: [], SS: [], SSS: [] };
+CHARACTER_ROSTER.forEach(c => CHARACTER_POOL[c.rank].push(c));
+
+// 召喚結果の表示専用: 各portrait(256x256透過PNG)内で実際にキャラが描かれている範囲(bbox)。
+// 画像ファイル自体は加工せず、この座標を元にCSSのbackground-size/positionをキャラごとに計算し、
+// 透過余白の差(C:約33%〜SSS:約61%)を吸収して見た目の背丈を揃えるために使う。
+const PORTRAIT_CANVAS_SIZE = 256;
+const PORTRAIT_BBOX = {
+    c_gail:       { x0: 93, y0: 77, x1: 169, y1: 174 },
+    c_roto:       { x0: 98, y0: 72, x1: 162, y1: 174 },
+    c_jin:        { x0: 90, y0: 73, x1: 163, y1: 174 },
+    c_popo:       { x0: 86, y0: 90, x1: 153, y1: 174 },
+    b_bardo:      { x0: 93, y0: 68, x1: 170, y1: 178 },
+    b_fiona:      { x0: 86, y0: 81, x1: 170, y1: 178 },
+    b_glen:       { x0: 86, y0: 77, x1: 170, y1: 178 },
+    b_lily:       { x0: 86, y0: 80, x1: 163, y1: 179 },
+    a_leon:       { x0: 93, y0: 65, x1: 170, y1: 190 },
+    a_elena:      { x0: 86, y0: 78, x1: 170, y1: 190 },
+    a_shion:      { x0: 86, y0: 64, x1: 170, y1: 191 },
+    a_valeria:    { x0: 86, y0: 47, x1: 163, y1: 191 },
+    s_kayen:      { x0: 88, y0: 43, x1: 170, y1: 196 },
+    s_mira:       { x0: 86, y0: 54, x1: 170, y1: 196 },
+    s_luna:       { x0: 86, y0: 72, x1: 170, y1: 196 },
+    s_zex:        { x0: 86, y0: 87, x1: 168, y1: 197 },
+    ss_asteria:   { x0: 90, y0: 56, x1: 170, y1: 196 },
+    ss_ignis:     { x0: 86, y0: 48, x1: 170, y1: 198 },
+    ss_morgana:   { x0: 86, y0: 55, x1: 170, y1: 196 },
+    ss_veil:      { x0: 86, y0: 81, x1: 162, y1: 197 },
+    sss_seraphy:  { x0: 78, y0: 41, x1: 184, y1: 189 },
+    sss_nocturne: { x0: 72, y0: 35, x1: 184, y1: 191 },
+    sss_eden:     { x0: 72, y0: 46, x1: 183, y1: 190 }
+};
+// 召喚結果ポートレートに、キャラごとのbboxを元にした background-size/position を適用する。
+// 画像は一切加工せず、CSSのcustom propertyだけを書き換えて表示上の背丈・足元位置を揃える。
+function applyPortraitCrop(el, characterId) {
+    const bbox = PORTRAIT_BBOX[characterId];
+    if (!el || !bbox) return;
+    const stage = el.closest('.summon-portrait-stage');
+    const cssTargetH = parseFloat(getComputedStyle(stage || document.documentElement).getPropertyValue('--portrait-target-h')) || 196;
+    // stage自身のoffsetHeightは、この時点でまだally本体のサイズが未確定のため信用できない
+    // (flex:1がally挿入前の空の状態を基準に伸びてしまい、確定後のカード高さとズレて全身が
+    // 枠外にはみ出すことがあった)。代わりに.summon-area(外側のflex列で高さが確定済み)から
+    // 実際のカード高さとgapを差し引いた「安全な残り高さ」を直接計算し、それを上限にする。
+    const area = el.closest('.summon-area');
+    const card = area ? area.querySelector('.gacha-card') : null;
+    let safeH = cssTargetH;
+    if (area && card && stage) {
+        const gapPx = parseFloat(getComputedStyle(stage.parentElement).gap) || 0;
+        safeH = area.offsetHeight - card.offsetHeight - gapPx - 18; // 18pxは丸め誤差・枠線・再計算タイミング差の安全バッファ
+    }
+    const targetH = safeH > 20 ? Math.min(safeH, cssTargetH) : cssTargetH;
+    const bboxH = bbox.y1 - bbox.y0;
+    const bboxW = bbox.x1 - bbox.x0;
+    const scale = targetH / bboxH;
+    const elW = bboxW * scale;
+    const bgSize = PORTRAIT_CANVAS_SIZE * scale;
+    el.style.width = `${elW}px`;
+    el.style.height = `${targetH}px`;
+    el.style.flex = `0 0 ${elW}px`;
+    el.style.setProperty('--bg-w', `${bgSize}px`);
+    el.style.setProperty('--bg-h', `${bgSize}px`);
+    el.style.setProperty('--bg-x', `${-bbox.x0 * scale}px`);
+    el.style.setProperty('--bg-y', `${-bbox.y0 * scale}px`);
+}
+
+// 23人分のportrait(256x256透過PNG)を先読みしておく。戦闘画面のcanvas描画(drawImage)で使う。
+const PORTRAIT_IMAGES = {};
+CHARACTER_ROSTER.forEach(c => {
+    const img = new Image();
+    img.onerror = () => console.warn(`[portrait] 画像の読込に失敗: ${c.portrait}`);
+    img.src = c.portrait;
+    PORTRAIT_IMAGES[c.portrait] = img;
+});
+
+// レア度が高いほど強いキャラが出るようにし、抽選演出の派手さも段階的に変える(合計100%: SSS1/SS4/S10/A20/B30/C35)
+const RARITY_TABLE = [
+    { key: 'SSS', cum: 0.01, flashClass: 'flash-sss', shakeLv: 4, buildupMs: 2800, sfx: 'gachasss', fanfare: 'fanfareEpic', title: 'SSS' },
+    { key: 'SS', cum: 0.05, flashClass: 'flash-ss', shakeLv: 3, buildupMs: 2200, sfx: 'gachalegend', fanfare: 'fanfareGrand', title: 'SS' },
+    { key: 'S', cum: 0.15, flashClass: 'flash-s', shakeLv: 2, buildupMs: 1700, sfx: 'gacha', fanfare: 'fanfareGrand', title: 'S' },
+    { key: 'A', cum: 0.35, flashClass: 'flash-a', shakeLv: 1, buildupMs: 1200, sfx: 'gacha', fanfare: 'fanfare', title: 'A' },
+    { key: 'B', cum: 0.65, flashClass: 'flash-b', shakeLv: 0, buildupMs: 700, sfx: 'select', fanfare: 'fanfare', title: 'B' },
+    { key: 'C', cum: 1.00, flashClass: 'flash-b', shakeLv: 0, buildupMs: 420, sfx: 'select', fanfare: 'fanfare', title: 'C' } // Bより短く控えめな演出
+];
+
+// ランクが上がるたびに公開演出(光の粒・リング)を派手にする。数・大きさ・色をランクごとに変える。
+const REVEAL_EFFECT_BY_RANK = {
+    C: { sparkCount: 5, sparkColor: '#9aa5ab', sparkSize: 4, ringColor: '#5d6b73', ringScale: 8, rings: 1 },
+    B: { sparkCount: 7, sparkColor: '#cfd8dc', sparkSize: 5, ringColor: '#95a5a6', ringScale: 10, rings: 1 },
+    A: { sparkCount: 9, sparkColor: '#6fd0ff', sparkSize: 6, ringColor: '#3498db', ringScale: 12, rings: 1 },
+    S: { sparkCount: 12, sparkColor: '#7cff9a', sparkSize: 7, ringColor: '#2ecc71', ringScale: 15, rings: 2 },
+    SS: { sparkCount: 16, sparkColor: '#d18cff', sparkSize: 8, ringColor: '#9b59b6', ringScale: 18, rings: 2 },
+    SSS: { sparkCount: 24, sparkColor: '#ffe98a', sparkSize: 9, ringColor: '#f1c40f', ringScale: 22, rings: 3 }
+};
+// 公開の瞬間に、ランクに応じた数・色の光の粒とリングを一瞬だけ表示する(既存の画面フラッシュ・シェイクとは別の演出)
+function spawnRevealEffects(rankKey) {
+    const cfg = REVEAL_EFFECT_BY_RANK[rankKey] || REVEAL_EFFECT_BY_RANK.C;
+    const stage = document.querySelector('.summon-portrait-stage');
+    if (!stage) return;
+    for (let i = 0; i < cfg.sparkCount; i++) {
+        const spark = document.createElement('span');
+        spark.className = 'reveal-spark';
+        const angle = (Math.PI * 2 * i) / cfg.sparkCount + (Math.random() * 0.4 - 0.2);
+        const dist = 60 + Math.random() * 50;
+        spark.style.setProperty('--spark-size', `${cfg.sparkSize}px`);
+        spark.style.setProperty('--spark-color', cfg.sparkColor);
+        spark.style.setProperty('--spark-x', `${Math.cos(angle) * dist}px`);
+        spark.style.setProperty('--spark-y', `${Math.sin(angle) * dist - 30}px`);
+        spark.style.setProperty('--spark-delay', `${Math.random() * 0.15}s`);
+        spark.style.setProperty('--spark-dur', `${0.6 + Math.random() * 0.4}s`);
+        stage.appendChild(spark);
+        setTimeout(() => spark.remove(), 1300);
+    }
+    for (let r = 0; r < cfg.rings; r++) {
+        const ring = document.createElement('span');
+        ring.className = 'reveal-ring';
+        ring.style.setProperty('--ring-color', cfg.ringColor);
+        ring.style.setProperty('--ring-scale', cfg.ringScale + r * 4);
+        ring.style.animationDelay = `${r * 0.15}s`;
+        stage.appendChild(ring);
+        setTimeout(() => ring.remove(), 1000);
+    }
+}
 
 // 役職ごとに見た目・色・装備を明確に分けた仲間スプライト
 const ALLY_VISUALS = {
@@ -1527,7 +1675,11 @@ function findExistingPartyMember(candidate) {
     if (candidate.job === '魔物') {
         return GameState.party.find(p => p.job === '魔物' && p.enemyTypeKey === candidate.enemyTypeKey);
     }
-    return GameState.party.find(p => p.job !== '魔物' && p.job === candidate.job);
+    if (candidate.characterId) {
+        // characterIdを最優先で同一人物判定する。characterIdを持たない同名の旧仲間もここで一度だけ救済統合する。
+        return GameState.party.find(p => p.job !== '魔物' && (p.characterId === candidate.characterId || (!p.characterId && p.name === candidate.name)));
+    }
+    return GameState.party.find(p => p.job !== '魔物' && p.job === candidate.job); // characterIdを持たない旧仲間同士は従来通りjobで判定
 }
 
 // 仲間の最大HP: 役職ごとに基準値を変え、Lv(重複強化・仕立工房と共通)に応じて伸びる
@@ -1591,12 +1743,18 @@ function getAllyAttackBase(ally, context) {
 function addOrEnhancePartyMember(candidate) {
     const existing = findExistingPartyMember(candidate);
     if (existing) {
+        // characterIdを持たない旧仲間が名前一致で見つかった場合、ここで一度だけportraitPath/characterIdを補完する
+        if (!existing.characterId && candidate.characterId) {
+            existing.characterId = candidate.characterId;
+            existing.portraitPath = candidate.portraitPath;
+        }
         existing.level = (existing.level || 1) + 1;
         existing.duplicateCount = (existing.duplicateCount || 0) + 1;
         existing.atkBonusPct = (existing.atkBonusPct || 0) + 10;
         if (existing.duplicateCount % 2 === 0) existing.skillLevel = (existing.skillLevel || 1) + 1;
         existing.maxHp = getAllyMaxHp(existing);
         existing.hp = existing.maxHp; // レベルアップ時は全回復する(戦闘不能からも復帰する)
+        savePartyData();
         return { merged: true, member: existing };
     }
     candidate.level = 1;
@@ -1606,6 +1764,7 @@ function addOrEnhancePartyMember(candidate) {
     candidate.maxHp = getAllyMaxHp(candidate);
     candidate.hp = candidate.maxHp;
     GameState.party.push(candidate);
+    savePartyData();
     return { merged: false, member: candidate };
 }
 
@@ -1762,8 +1921,35 @@ function rectsOverlap(a, b) {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
+// 承認済みキャラのportrait(256x256透過PNG)をcanvasへ描く。戦闘画面だけで使い、フィールド追従では使わない。
+// centerX/centerYは足元(下端中央)を基準にする(drawSpriteと同じ座標系)。画像が未読込ならfalseを返す。
+function drawCharacterPortrait(ctxObj, follower, centerX, centerY, heightPx) {
+    const img = follower.portraitPath ? PORTRAIT_IMAGES[follower.portraitPath] : null;
+    if (!img || !img.complete || img.naturalWidth === 0) return false;
+    const kx = follower.sprite ? follower.sprite.knockback.x : 0;
+    const ky = follower.sprite ? follower.sprite.knockback.y : 0;
+    const dh = heightPx;
+    const dw = dh * (img.naturalWidth / img.naturalHeight); // object-fit:contain相当(縦横比を保って全身を切らない)
+    const dx = centerX + kx - dw / 2;
+    const dy = centerY + ky - dh;
+    ctxObj.save();
+    ctxObj.imageSmoothingEnabled = false;
+    if (follower.sprite && follower.sprite.flashFrames > 0 && Math.floor(follower.sprite.flashFrames / 2) % 2 === 0) {
+        // 被弾中の白点滅(既存のdrawSpriteと同じsource-atop手法)
+        ctxObj.drawImage(img, dx, dy, dw, dh);
+        ctxObj.globalCompositeOperation = 'source-atop';
+        ctxObj.fillStyle = 'rgba(255,255,255,0.85)';
+        ctxObj.fillRect(dx, dy, dw, dh);
+        ctxObj.globalCompositeOperation = 'source-over';
+    } else {
+        ctxObj.drawImage(img, dx, dy, dw, dh);
+    }
+    ctxObj.restore();
+    return true;
+}
+
 // パーティ追従者(仲間 or 元・敵)をスプライトで描画する共通ヘルパー
-function drawFollowerSprite(follower, x, y, scale) {
+function drawFollowerSprite(follower, x, y, scale, isBattleContext) {
     // 戦闘不能(HP0)の仲間は半透明で描く(既存の描画分岐は内側でそのまま使う)
     const isKnockedOut = typeof follower.hp === 'number' && follower.hp <= 0;
     ctx.save();
@@ -1842,6 +2028,12 @@ function drawFollowerSprite(follower, x, y, scale) {
         ctx.drawImage(asteriaPortraitImg, zonSkillFrameIndex * cellW, ZON_ATLAS_ROW * cellH, cellW, cellH, drawX - dw / 2, y - dh, dw, dh);
         ctx.restore();
         return;
+    }
+    // 承認済みキャラは戦闘画面だけportraitPathを使う(フィールド追従は既存の歩行アニメーションのまま)。
+    // ボタンやHP表示を隠さないよう、既存の歩行スプライトとほぼ同じ高さに収める。
+    if (isBattleContext && follower.portraitPath) {
+        const baseCell = follower.sprite ? follower.sprite.cell : 48;
+        if (drawCharacterPortrait(ctx, follower, x, y, baseCell * scale)) return;
     }
     if (!follower.sprite) return;
     drawSprite(ctx, follower.sprite, x, y, { scale });
@@ -2393,7 +2585,7 @@ function drawGame() {
         const benchList = activeFighter ? [GameState.avatar, ...GameState.party.filter(p => p !== activeFighter)] : GameState.party;
         benchList.forEach((follower, i) => {
             let px = 100 - (Math.floor(i / 3) * 30), py = 300 + ((i % 3) * 60);
-            drawFollowerSprite(follower, px, py, 0.9);
+            drawFollowerSprite(follower, px, py, 0.9, true);
             // 仲間のHPバー(数値を持つ仲間のみ)。戦闘不能は赤いバーで示す。
             if (typeof follower.hp === 'number' && typeof follower.maxHp === 'number') {
                 const barW = 40, barX = px - barW / 2, barY = py - 46;
@@ -2402,6 +2594,12 @@ function drawGame() {
                 ctx.fillStyle = follower.hp <= 0 ? '#803030' : (pct < 0.3 ? '#e05a3a' : '#4fd06a');
                 ctx.fillRect(barX, barY, barW * pct, 5);
                 ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barW, 5);
+            }
+            // 属性の対応色を小さな丸で示す(承認済みキャラのみ)
+            if (follower.style && STYLE_COLORS[follower.style]) {
+                ctx.fillStyle = STYLE_COLORS[follower.style];
+                ctx.beginPath(); ctx.arc(px + 22, py - 43, 4, 0, Math.PI * 2); ctx.fill();
+                ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
             }
         });
         // 踏み込み攻撃: 構え位置(200)から敵側(550)へ滑らかに前進する
@@ -2423,7 +2621,12 @@ function drawGame() {
             ctx.fillStyle = grad;
             ctx.beginPath(); ctx.arc(hx, hy - 15, pulse, 0, Math.PI * 2); ctx.fill();
         }
-        drawSprite(ctx, frontFighter.sprite, hx, hy, { scale: isBattling ? 1.5 : 1 });
+        if (isBattling && activeFighter) {
+            // 交代中の前衛は仲間用の共通ヘルパーを使う(アステア専用ポートレート等の優先順位も後衛グリッドと揃う)
+            drawFollowerSprite(activeFighter, hx, hy, 1.5, true);
+        } else {
+            drawSprite(ctx, frontFighter.sprite, hx, hy, { scale: isBattling ? 1.5 : 1 });
+        }
         // 交代中は前衛の仲間にも小さなHPバーを出す(後衛グリッドと同じ見た目)
         if (isBattling && activeFighter && typeof activeFighter.hp === 'number' && typeof activeFighter.maxHp === 'number') {
             const barW = 50, barX = hx - barW / 2, barY = hy - 95;
@@ -2432,6 +2635,12 @@ function drawGame() {
             ctx.fillStyle = activeFighter.hp <= 0 ? '#803030' : (pct < 0.3 ? '#e05a3a' : '#4fd06a');
             ctx.fillRect(barX, barY, barW * pct, 6);
             ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barW, 6);
+            // 属性の対応色を小さな丸で示す(承認済みキャラのみ)
+            if (activeFighter.style && STYLE_COLORS[activeFighter.style]) {
+                ctx.fillStyle = STYLE_COLORS[activeFighter.style];
+                ctx.beginPath(); ctx.arc(barX + barW + 8, barY + 3, 4, 0, Math.PI * 2); ctx.fill();
+                ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+            }
         }
     }
 
@@ -2533,10 +2742,16 @@ function toggleMenu() {
             } else {
                 const visual = ALLY_VISUALS[p.job] || ALLY_VISUALS['裁断戦士'];
                 const isAsteria = p.name === ASTERIA_NAME;
-                const spritePath = isAsteria ? ASTERIA_PORTRAIT_PATH : visual.path;
-                const spriteClass = isAsteria ? ' is-asteria-portrait' : '';
+                const styleColor = STYLE_COLORS[p.style] || '#fff';
+                const styleLabel = p.style ? `<span style="color:${styleColor};">${p.style}</span> / ` : '';
+                // 承認済みキャラは本人portraitPathを表示する。アステアは専用ポートレート、それ以外は歩行スプライトの先頭コマ。
+                const imgTag = isAsteria
+                    ? `<span class="party-sprite is-asteria-portrait" style="--ally-sprite:url('${ASTERIA_PORTRAIT_PATH}')"></span>`
+                    : (p.portraitPath
+                        ? `<img class="character-portrait" src="${p.portraitPath}" alt="${p.name}">`
+                        : `<span class="party-sprite" style="--ally-sprite:url('${visual.path}')"></span>`);
                 li.className = `party-member-row ${visual.roleClass}${isKO ? ' is-knocked-out' : ''}`;
-                li.innerHTML = `<span class="party-sprite${spriteClass}" style="--ally-sprite:url('${spritePath}')"></span><span>✨${p.name}<small>${visual.label} / ${p.style} / ${p.rarity} / ${growthLabel}${hpLabel}</small></span>`;
+                li.innerHTML = `${imgTag}<span>✨${p.name}<small>${p.job || visual.label} / ${styleLabel}${p.rarity} / ${growthLabel}${hpLabel}</small></span>`;
             }
             list.appendChild(li);
         });
@@ -2560,8 +2775,10 @@ function renderTailorWorkshop() {
         const li = document.createElement('li');
         li.style.display = 'flex'; li.style.justifyContent = 'space-between'; li.style.alignItems = 'center'; li.style.margin = '5px 0';
         const label = document.createElement('span');
+        label.style.display = 'flex'; label.style.alignItems = 'center';
         const koLabel = ally.hp <= 0 ? '(戦闘不能)' : '';
-        label.textContent = `${ally.name} Lv.${level} HP:${Math.max(0, ally.hp || 0)}/${ally.maxHp || getAllyMaxHp(ally)}${koLabel}`;
+        const thumbTag = ally.portraitPath ? `<img class="character-portrait-thumb" src="${ally.portraitPath}" alt="${ally.name}">` : '';
+        label.innerHTML = `${thumbTag}<span>${ally.name} Lv.${level} HP:${Math.max(0, ally.hp || 0)}/${ally.maxHp || getAllyMaxHp(ally)}${koLabel}</span>`;
         const btn = document.createElement('button');
         btn.className = 'retro-btn small-btn';
         btn.textContent = `▶ Lvアップ (${cost}G)`;
@@ -2582,6 +2799,7 @@ function levelUpAllyWithGold(ally) {
     ally.maxHp = getAllyMaxHp(ally);
     ally.hp = ally.maxHp; // Lvアップで全回復する(戦闘不能からも復帰する)
     playSound('fanfare');
+    savePartyData();
     renderTailorWorkshop();
 }
 
@@ -2683,6 +2901,7 @@ function startGame() {
     audioBridge.currentFieldMusicId = 'field-meadow';
     updateFieldDialogText();
     playFastEpicBGM(false); player.x = 190; player.y = 190; historyLog.length = 0; GameState.party = []; updateGold(0);
+    loadPartyData(); // 保存済みの仲間(characterId・portraitPath・Lv等)があれば復元する
     GameState.avatar.sprite = new SpriteAnimator('hero', GameState.avatar.job);
     currentTrend = ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)]; // Init trend
     FieldAmbientAnimation.start('azurlight');
@@ -2769,14 +2988,14 @@ document.getElementById('btn-summon').addEventListener('click', () => {
     gachaRelic.className = 'relic-arrive';
     magicCir.className = ''; magicCir.classList.remove('hidden'); magicCir.classList.add('charging-1');
 
-    // 結果(B/A/S/SS/SSS)は先に抽選しておき、盛り上がりの演出だけを段階的に見せる
+    // 結果(C/B/A/S/SS/SSS)は先に抽選しておき、盛り上がりの演出だけを段階的に見せる
     const rand = Math.random();
     const rankData = RARITY_TABLE.find(r => rand < r.cum);
     const pool = CHARACTER_POOL[rankData.key];
     const picked = pool[Math.floor(Math.random() * pool.length)];
-    const itemStyle = ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)];
-    const job = rankData.job;
-    const allyVisual = ALLY_VISUALS[job] || ALLY_VISUALS['裁断戦士'];
+    const itemStyle = picked.style; // characters.jsonの正式属性をそのまま使う(ランダムにしない)
+    const job = picked.job; // ジョブも本人の正式ジョブを使う(ランク一律ではない)
+    const allyVisual = ALLY_VISUALS[job] || ALLY_VISUALS['裁断戦士']; // 歩行スプライトは既存3種のフォールバックのまま(portraitは別途表示)
     const total = rankData.buildupMs;
     clearGachaRankClasses();
     summonArea.classList.add(`summon-rank-${rankData.key.toLowerCase()}`);
@@ -2820,17 +3039,26 @@ document.getElementById('btn-summon').addEventListener('click', () => {
         const buildResultMarkup = (silhouette) => {
             // アステアだけ専用ポートレートを使う(名前一致時のみ。他キャラの表示は変更しない)
             const isAsteria = picked.name === ASTERIA_NAME;
-            const spritePath = isAsteria ? ASTERIA_PORTRAIT_PATH : allyVisual.path;
-            const spriteClass = isAsteria ? ' is-asteria-portrait' : '';
+            // 承認済み23人は本人のportraitPathを大きく表示する(役職共通画像には置き換えない)
+            const spritePath = isAsteria ? ASTERIA_PORTRAIT_PATH : (picked.portrait || allyVisual.path);
+            const spriteClass = isAsteria ? ' is-asteria-portrait' : (picked.portrait ? ' is-portrait-image' : '');
+            const styleColor = STYLE_COLORS[itemStyle] || '#fff';
             document.getElementById('summon-result').innerHTML = `
               <div class="gacha-reveal rank-${rankData.key.toLowerCase()} ${allyVisual.roleClass}">
-                <div class="summoned-ally big${spriteClass} ${silhouette ? 'silhouette' : ''}" style="--ally-sprite:url('${spritePath}')"></div>
+                <div class="summon-portrait-stage">
+                  <div class="summoned-ally big${spriteClass} ${silhouette ? 'silhouette' : ''}" style="--ally-sprite:url('${spritePath}')"></div>
+                </div>
                 <div class="gacha-card rarity-${rankData.key.toLowerCase()}">
                   <div class="gacha-rank">${rankData.title}</div>
                   <h3 style="color:${picked.color}; margin-top:4px;">${picked.name}</h3>
-                  <small>${allyVisual.label} / 属性: ${itemStyle}</small>
+                  <small>${job} / 属性: <span style="color:${styleColor};">${itemStyle}</span></small>
                 </div>
               </div>`;
+            // 承認済みportrait本人画像のみ、キャラごとの透明余白差を吸収するサイズ補正をかける
+            // (アステアの専用スプライトシート表示や、旧来のsprite-sheet表示は対象外・従来通り)
+            if (spriteClass === ' is-portrait-image') {
+                applyPortraitCrop(document.querySelector('.summoned-ally.big'), picked.id);
+            }
         };
 
         const finishReveal = () => {
@@ -2838,7 +3066,7 @@ document.getElementById('btn-summon').addEventListener('click', () => {
                 ? `✨${rankData.title}★ 超激レアの魂が舞い降りた！ ★${rankData.title}✨`
                 : '召喚成功！新しい仲間がパーティに加わった！';
 
-            const result = addOrEnhancePartyMember({ name: picked.name, job, rarity: rankData.key, style: itemStyle, color: picked.color, visualPath: allyVisual.path, isDragon: false, originItem: '時環召喚', sprite: new SpriteAnimator('ally', job) });
+            const result = addOrEnhancePartyMember({ name: picked.name, job, rarity: rankData.key, style: itemStyle, color: picked.color, visualPath: allyVisual.path, characterId: picked.id, portraitPath: picked.portrait, isDragon: false, originItem: '時環召喚', sprite: new SpriteAnimator('ally', job) });
             shopMsg.innerHTML = result.merged
                 ? `${baseMsg}<br>💫 同じ魂が重なった！ Lv.${result.member.level} へ強化（攻撃+${result.member.atkBonusPct}%）`
                 : baseMsg;
@@ -2858,7 +3086,12 @@ document.getElementById('btn-summon').addEventListener('click', () => {
             if (silhouetteWasShown && sprite) sprite.classList.remove('silhouette');
             stopBGM();
             playSound(rankData.fanfare);
+            spawnRevealEffects(rankData.key); // ランクが上がるほど豪華になる光の粒・リング演出
             finishReveal();
+            // finishReveal()がshopMsgを最終文言へ書き換えると.summon-areaの実高さが変わることがあるため、
+            // 確定後の高さで召喚結果ポートレートのサイズを再計算し、全身が枠外へはみ出さないようにする。
+            const finalAlly = document.querySelector('.summoned-ally.big.is-portrait-image');
+            if (finalAlly && picked.portrait && picked.name !== ASTERIA_NAME) applyPortraitCrop(finalAlly, picked.id);
         };
 
         // 時環の種子が展開する瞬間を見せてから、レアリティと仲間を表示する
