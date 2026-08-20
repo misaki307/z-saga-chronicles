@@ -33,12 +33,107 @@ musicBus.knee.setValueAtTime(18, audioCtx.currentTime);
 musicBus.ratio.setValueAtTime(4, audioCtx.currentTime);
 musicBus.attack.setValueAtTime(0.003, audioCtx.currentTime);
 musicBus.release.setValueAtTime(0.15, audioCtx.currentTime);
-// フィールド拡張: フィールド移動時のクロスフェード専用ゲイン。通常は1のまま、
-// 移動時だけ600msでフェードアウト→フェードインする(戦闘/召喚SEには影響しない)。
+// フィールド拡張: BGM出力ゲイン(musicBusの出口)。SE(playSound)はこれを経由せず
+// audioCtx.destinationへ直結のままなので、BGM側だけを操作してもSEには影響しない。
 const fieldMusicGain = audioCtx.createGain();
 fieldMusicGain.gain.setValueAtTime(1, audioCtx.currentTime);
 musicBus.connect(fieldMusicGain);
 fieldMusicGain.connect(audioCtx.destination);
+
+// ==========================================
+// BGMManager: BGMを一元管理する。同時に再生できるBGMは常に1系統だけ。
+// playBGM(trackId, startFn)がすべてのBGM切り替えの唯一の入口。
+// 呼び出すたびに (1)現在のBGM停止 → (2)タイマー解除 → (3)oscillator/AudioNode切断 →
+// (4)再生中BGM IDの更新 → (5)新しいBGMを1回だけ開始、の順で処理する。
+// 同じtrackIdが既に再生中なら何もしない(二重再生防止)。
+// SE(playSound)はこのマネージャの対象外で、audioCtx.destinationへ直結の別経路のまま。
+// クロスフェードはしない: 古い曲は短いフェード(~80ms)ですぐ黙らせて切断し、
+// その後(合計約150ms)に新しい曲を開始する。曲の内容・テンポ自体は一切変更しない。
+// ==========================================
+const BGMManager = {
+    currentBgmId: null,
+    isPlaying: false,
+    _interval: null,       // 現在のBGMループのsetInterval ID
+    _timeouts: new Set(),  // BGM切替に伴うsetTimeout ID群(遅延ループ開始など)
+    _nodes: new Set(),     // BGM用に生成した{osc,gain,filter}(切替時に強制的に黙らせて切断する)
+    _gen: 0,                // 世代カウンタ。古い遅延コールバックが後から発火するのを防ぐ。
+
+    // synthVoice/synthDrum/synthTimpaniなど、BGM用の生oscillatorを作る箇所から呼ぶ。
+    registerNode(osc, gain, filter) {
+        const entry = { osc, gain, filter: filter || null };
+        this._nodes.add(entry);
+        // 自然に鳴り終わったノードは自動的に管理から外す(_nodesが際限なく増え続けないようにする)
+        try { osc.addEventListener('ended', () => this._nodes.delete(entry), { once: true }); } catch (e) {}
+        return entry;
+    },
+    // 現在の再生ループが使うsetIntervalのIDを登録する(startSequencer/shop/summonループから呼ぶ)
+    trackInterval(id) { this._interval = id; return id; },
+    // 遅延処理のsetTimeout IDを登録する(BGM切替時に必ずclearされる)
+    trackTimeout(id) { this._timeouts.add(id); return id; },
+
+    // 現在のBGMのタイマー・ノードをすべて止める。曲の内容には触れず、鳴っている音を黙らせるだけ。
+    _hardStop() {
+        if (this._interval) { clearInterval(this._interval); this._interval = null; }
+        this._timeouts.forEach(id => clearTimeout(id));
+        this._timeouts.clear();
+        const now = audioCtx.currentTime;
+        const nodesToDisconnect = Array.from(this._nodes);
+        this._nodes.clear();
+        nodesToDisconnect.forEach(entry => {
+            try {
+                entry.gain.gain.cancelScheduledValues(now);
+                entry.gain.gain.setValueAtTime(Math.max(entry.gain.gain.value, 0.0001), now);
+                entry.gain.gain.linearRampToValueAtTime(0.0001, now + 0.08); // 短いフェードでクリックを防ぎつつすぐ黙らせる
+            } catch (e) { /* 既に停止済みのノードは無視 */ }
+            try { entry.osc.stop(now + 0.09); } catch (e) { /* 既に停止予約済みなら無視 */ }
+        });
+        // oscillator/AudioNodeの切断: フェードが終わってから行う(即切断だとプツッと鳴ることがあるため)
+        setTimeout(() => {
+            nodesToDisconnect.forEach(entry => {
+                try { entry.osc.disconnect(); } catch (e) {}
+                try { entry.gain.disconnect(); } catch (e) {}
+                if (entry.filter) { try { entry.filter.disconnect(); } catch (e) {} }
+            });
+        }, 100);
+    },
+
+    // BGMを1曲だけ再生する。同じtrackIdが既に再生中なら何もしない。
+    playBGM(trackId, startFn) {
+        if (this.currentBgmId === trackId && this.isPlaying) return; // 二重再生防止
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        this._gen++;
+        const myGen = this._gen;
+        this._hardStop();                 // 1.現在のBGM停止 2.タイマー解除 3.ノード切断(スケジュール)
+        this.currentBgmId = trackId;      // 4.再生中BGM IDを更新
+        this.isPlaying = true;
+        // クロスフェードはしない。古い曲を約150ms内に止めてから、新しい曲を1回だけ開始する。
+        const t = setTimeout(() => {
+            this._timeouts.delete(t);
+            if (myGen !== this._gen) return; // より新しい切替が既に発生していたら何もしない
+            startFn();                        // 5.新しいBGMを1回だけ開始
+        }, 150);
+        this.trackTimeout(t);
+    },
+
+    // BGMを完全に停止する(次に何も再生しない)
+    stop() {
+        this._gen++;
+        this._hardStop();
+        this.currentBgmId = null;
+        this.isPlaying = false;
+    },
+
+    // 確認用: 再生中のBGM ID・稼働中のタイマー数・BGM用AudioNode数を返す
+    debugInfo() {
+        return {
+            currentBgmId: this.currentBgmId,
+            isPlaying: this.isPlaying,
+            hasInterval: !!this._interval,
+            timeoutCount: this._timeouts.size,
+            nodeCount: this._nodes.size
+        };
+    }
+};
 
 function synthVoice(freq, opts) {
     opts = opts || {};
@@ -59,8 +154,9 @@ function synthVoice(freq, opts) {
     g.gain.setValueAtTime(0.0001, now);
     g.gain.linearRampToValueAtTime(gain, now + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    let filter = null;
     if (filterHz) {
-        const filter = audioCtx.createBiquadFilter();
+        filter = audioCtx.createBiquadFilter();
         filter.type = 'lowpass'; filter.frequency.setValueAtTime(filterHz, now); filter.Q.value = filterQ;
         osc.connect(filter); filter.connect(g);
     } else {
@@ -68,6 +164,7 @@ function synthVoice(freq, opts) {
     }
     g.connect(musicBus);
     osc.start(now); osc.stop(now + dur + 0.05);
+    BGMManager.registerNode(osc, g, filter);
 }
 // 弦楽器風: 2声をわずかにデチューンして重ねるアンサンブル効果
 function synthStrings(freq, dur, gain, start) {
@@ -100,15 +197,81 @@ function synthSubBass(freq, dur, gain, start) {
     synthVoice(freq, { type: 'square', dur: dur, gain: gain, start: start, attack: 0.005, filterHz: 300 });
     synthVoice(freq / 2, { type: 'sine', dur: dur, gain: gain * 0.8, start: start, attack: 0.005 });
 }
-// 一定間隔でstepFnを呼ぶ簡易シーケンサー。bgmIntervalを共有するのでstopBGM()で必ず止まる。
+// 打楽器風: 短時間でピッチを下げて「ドン」という胴鳴りの打撃音を作る(戦闘BGM専用)
+function synthDrum(freq, dur, gain, start) {
+    const now = audioCtx.currentTime + (start || 0);
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq * 0.35), now + dur);
+    g.gain.setValueAtTime(gain, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.connect(g); g.connect(musicBus);
+    osc.start(now); osc.stop(now + dur + 0.02);
+    BGMManager.registerNode(osc, g, null);
+}
+// ==========================================
+// オーケストラ風BGM専用の追加音色ヘルパー(既存のSFX/synth*には触れず追加するだけ)
+// ==========================================
+// ピチカート: 弦をはじく短い音。速い減衰。
+function synthPizzicato(freq, gain, start) {
+    synthVoice(freq, { type: 'triangle', dur: 0.14, gain: gain, start: start, attack: 0.002, filterHz: 2600 });
+}
+// ハープ: つまびき音。基音+高次倍音のきらめきを短く添える。
+function synthHarp(freq, dur, gain, start) {
+    synthVoice(freq, { type: 'triangle', dur: dur, gain: gain, start: start, attack: 0.004 });
+    synthVoice(freq * 2, { type: 'sine', dur: dur * 0.6, gain: gain * 0.3, start: start, attack: 0.004 });
+}
+// ファゴット風: 低い帯域のリードらしいうなりを持つ木管
+function synthBassoon(freq, dur, gain, start) {
+    synthVoice(freq, { type: 'sawtooth', dur: dur, gain: gain, start: start, attack: 0.03, filterHz: 900, filterQ: 3 });
+}
+// ティンパニ: 音程を持つ低い打楽器。synthDrumより低く・長く尾を引く。
+function synthTimpani(freq, dur, gain, start) {
+    const now = audioCtx.currentTime + (start || 0);
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq * 1.5, now);
+    osc.frequency.exponentialRampToValueAtTime(freq, now + 0.06);
+    g.gain.setValueAtTime(gain, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.connect(g); g.connect(musicBus);
+    osc.start(now); osc.stop(now + dur + 0.03);
+    BGMManager.registerNode(osc, g, null);
+}
+// スネア風: 高めの帯域を2声デチューンで重ね、金属的な「ジャッ」という質感にする(ノイズ無しの近似)
+function synthSnare(gain, start) {
+    [1800, 2400, 3100].forEach((f, i) => {
+        synthVoice(f, { type: 'square', dur: 0.07 - i * 0.01, gain: gain * (i === 0 ? 1 : 0.5), start: start, attack: 0.001, filterHz: 4000 });
+    });
+}
+// シンバル風: 非整数倍音を重ねて減衰の長い金属音にする
+function synthCymbal(gain, start) {
+    [1, 1.63, 2.29, 3.4, 4.7].forEach((mul, i) => {
+        synthVoice(2200 * mul, { type: 'square', dur: 0.5 - i * 0.05, gain: gain * (0.5 / (i + 1)), start: start, attack: 0.001, filterHz: 6000 });
+    });
+}
+// ブラウザタブが非表示になったら音声を一時停止し、復帰したら再開する(BGM・SFX共通、既存のミュート/音量設定には触れない)
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        if (audioCtx.state === 'running') audioCtx.suspend();
+    } else if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+});
+
+// 一定間隔でstepFnを呼ぶ簡易シーケンサー。
+// BGMManager.playBGM()から呼ばれるstartFnの中でのみ使う想定(現在のBGM停止は既にBGMManager側で済んでいる)。
 function startSequencer(stepMs, stepFn, stepCount) {
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    stopBGM();
     let step = 0;
-    bgmInterval = setInterval(() => {
+    const id = setInterval(() => {
         stepFn(step);
         step = (step + 1) % stepCount;
     }, stepMs);
+    BGMManager.trackInterval(id);
 }
 
 function playSound(type) {
@@ -190,6 +353,14 @@ function playSound(type) {
         osc.type = 'square'; osc.frequency.setValueAtTime(1500, now);
         gainNode.gain.setValueAtTime(0.15, now); gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
         osc.start(now); osc.stop(now + 0.05);
+    } else if (type === 'footstep') {
+        // 移動中の足音。左右交互に少しピッチを変え、控えめな音量で鳴らす。
+        footstepToggle = !footstepToggle;
+        const baseFreq = footstepToggle ? 130 : 108;
+        osc.type = 'triangle'; osc.frequency.setValueAtTime(baseFreq, now);
+        osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.55, now + 0.08);
+        gainNode.gain.setValueAtTime(0.08, now); gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+        osc.start(now); osc.stop(now + 0.09);
     } else if (type === 'noise') {
         osc.type = 'square'; osc.frequency.setValueAtTime(100, now);
         for (let i = 0; i < 10; i++) osc.frequency.setValueAtTime(Math.random() * 800 + 100, now + (i * 0.05));
@@ -198,151 +369,223 @@ function playSound(type) {
     }
 }
 
-let bgmInterval = null;
-
 // フィールドBGM（オリジナル）: 現在地(GameState.currentFieldId)に応じて3曲を出し分ける。
-// アズライト大陸=既存の草原テーマ(変更なし)、闇の森・洗濯槽深層は新規テーマ。
+// BGMManager.playBGM()を介して、常にそのフィールドの曲だけが1系統再生される。
 function playFieldBGM() {
     const fieldId = GameState.currentFieldId || 'azurlight';
-    if (fieldId === 'wardrobe_gloomwood') playWardrobeFieldBGM();
-    else if (fieldId === 'laundry_abyss') playLaundryFieldBGM();
-    else playMeadowFieldBGM();
+    if (fieldId === 'wardrobe_gloomwood') BGMManager.playBGM('field:wardrobe_gloomwood', playWardrobeFieldBGM);
+    else if (fieldId === 'laundry_abyss') BGMManager.playBGM('field:laundry_abyss', playLaundryFieldBGM);
+    else BGMManager.playBGM('field:azurlight', playMeadowFieldBGM);
 }
 
-// アズライト大陸: D dorian。前半8ステップは静か(笛のみ)、
-// 後半8ステップは金管+弦+ベースで盛り上がる「静と動」を1周期で繰り返す。(既存テーマ、変更なし)
+// アズライト大陸(草原): 118BPM。オリジナルの壮大な冒険オーケストラ風。
+// ホルン(synthBrass)の主旋律 + 弦の刻み + ハープのアルペジオ + フルートの短い返答。
+// 有名曲の旋律・コード進行はコピーせず、D-durの短いオリジナルモチーフから作る。
 function playMeadowFieldBGM() {
-    const stepMs = 260;
+    const bpm = 118;
+    const stepMs = 30000 / bpm; // 8分音符1ステップ(2ステップ=1拍)
     const stepDur = stepMs / 1000;
-    const quietMelody = [440, 0, 587.33, 0, 523.25, 0, 440, 0]; // A4 . D5 . C5 . A4 .
-    const climaxMelody = [587.33, 698.46, 880, 783.99, 698.46, 587.33, 523.25, 587.33]; // D5 F5 A5 G5 F5 D5 C5 D5
-    const climaxBass = [146.83, 146.83, 220, 220, 146.83, 146.83, 196.00, 220]; // D3 D3 A3 A3 D3 D3 G3 A3
-    const padChord = [293.66, 349.23, 440]; // D4 F4 A4
+    // ホルンの主旋律(D5→A5→D5のオリジナルな山なりモチーフ、4拍子×2小節=16ステップ)
+    const hornMelody = [587.33, 0, 659.25, 0, 739.99, 0, 880.00, 0, 783.99, 0, 739.99, 0, 659.25, 0, 0, 0];
+    // ハープのアルペジオ(D4-F#4-A4-D5の分散和音を毎ステップ回す)
+    const harpArp = [293.66, 369.99, 440.00, 587.33];
+    // 弦の刻み(ルート音、4ステップごとに切替)
+    const stringRoots = [146.83, 146.83, 146.83, 146.83, 220.00, 220.00, 220.00, 220.00, 146.83, 146.83, 146.83, 146.83, 196.00, 196.00, 220.00, 220.00];
+    // フルートの短い返答(フレーズの最後だけ)
+    const fluteTail = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 739.99, 659.25, 587.33];
 
     startSequencer(stepMs, (step) => {
-        if (step < 8) {
-            if (step === 0) padChord.forEach(f => synthStrings(f, stepDur * 8, 0.045, 0));
-            const n = quietMelody[step];
-            if (n) synthFlute(n, stepDur * 1.6, 0.13, 0);
-        } else {
-            const i = step - 8;
-            if (step === 8) padChord.forEach(f => synthStrings(f, stepDur * 8, 0.08, 0));
-            synthBrass(climaxMelody[i], stepDur * 1.1, 0.15, 0);
-            synthVoice(climaxBass[i], { type: 'triangle', dur: stepDur * 1.05, gain: 0.13, attack: 0.01 });
-        }
+        synthHarp(harpArp[step % harpArp.length], stepDur * 1.3, 0.075, 0);
+        if (step % 4 === 0) synthStrings(stringRoots[step], stepDur * 4.4, 0.05, 0);
+        const horn = hornMelody[step];
+        if (horn) synthBrass(horn, stepDur * 1.7, 0.13, 0);
+        const tail = fluteTail[step];
+        if (tail) synthFlute(tail, stepDur * 1.3, 0.12, 0);
     }, 16);
 }
 
-// 闇の森・クローゼット深部（オリジナル）: 短調・低いドローン・木を叩くようなノック音・ボタンのようなベル。
-// 静かで不穏。74BPM相当のゆっくりしたテンポ。
+// 闇の森・クローゼット深部（オリジナル）: 88BPM。低い弦とファゴット風の音、不規則なピチカート、
+// 小さなベルと低いティンパニ。怖すぎず、先へ進む緊張感を出す。
 function playWardrobeFieldBGM() {
-    const stepMs = 400;
+    const bpm = 88;
+    const stepMs = 30000 / bpm;
     const stepDur = stepMs / 1000;
-    const melody = [0, 0, 293.66, 0, 0, 349.23, 0, 0]; // D4 . . F4 . . （休符主体の不穏な旋律）
+    // ファゴット風の低い短いモチーフ(D3→F3→E3→D3、休符主体で不穏さを出す)
+    const bassoonMelody = [146.83, 0, 0, 174.61, 0, 0, 164.81, 0, 146.83, 0, 0, 0, 130.81, 0, 0, 0];
+    // 不規則なピチカート(規則的な拍から少しずらして配置)
+    const pizzSteps = [1, 3, 6, 9, 11, 14];
+    const pizzNotes = [293.66, 349.23, 329.63, 293.66, 261.63, 293.66]; // D4 F4 E4 D4 C4 D4
+    // 小さなベル(まばらに)
+    const bellSteps = [5, 13];
+
     startSequencer(stepMs, (step) => {
-        if (step === 0) synthChoir(146.83, stepDur * 8, 0.045, 0); // D3 ドローン
-        const mel = melody[step];
-        if (mel) synthBell(mel, 1.2, 0.07, 0); // ボタンが鳴るようなベル
-        if (step % 2 === 0) synthVoice(80, { type: 'square', dur: 0.05, gain: 0.07, attack: 0.001, filterHz: 250 }); // 木を叩くようなノック音
-    }, 8);
+        if (step === 0) synthStrings(73.42, stepDur * 8, 0.05, 0); // D2 低い弦のドローン
+        if (step === 8) synthTimpani(65.41, stepDur * 3, 0.11, 0); // 低いティンパニ(C2)
+        const bs = bassoonMelody[step];
+        if (bs) synthBassoon(bs, stepDur * 1.8, 0.09, 0);
+        const pIdx = pizzSteps.indexOf(step);
+        if (pIdx >= 0) synthPizzicato(pizzNotes[pIdx], 0.08, 0);
+        if (bellSteps.includes(step)) synthBell(1046.50, 1.1, 0.055, 0); // 小さなボタンベル
+    }, 16);
 }
 
-// 洗濯槽深層・ランドリーアビス（オリジナル）: 浮遊感のある三角波、水滴のような高音、揺れる低音。
-// 92BPM相当。
+// 洗濯槽深層・ランドリーアビス（オリジナル）: 104BPM。ハープと高い弦のアルペジオ、水中らしい
+// ベルと柔らかなコーラス風パッド、ドラムの回転を感じる一定の低音リズム、気泡の短い高音。
 function playLaundryFieldBGM() {
-    const stepMs = 300;
+    const bpm = 104;
+    const stepMs = 30000 / bpm;
     const stepDur = stepMs / 1000;
-    const bassNotes = [130.81, 146.83, 130.81, 116.54]; // C3 D3 C3 Bb2（ゆったり揺れる低音）
-    const dropNotes = [0, 1567.98, 0, 0, 1864.66, 0, 0, 1318.51]; // 水滴のような高音、疎らに
+    // ハープ+高い弦のアルペジオ(A3-C#4-E4-A4-E4-C#4の分散和音)
+    const arp = [220.00, 277.18, 329.63, 440.00, 329.63, 277.18, 220.00, 277.18, 329.63, 440.00, 329.63, 277.18, 220.00, 277.18, 329.63, 440.00];
+    // 水中ベル(まばら)
+    const bellSteps = [3, 11];
+    // 気泡の短い高音(疎らに)
+    const bubbleSteps = [2, 6, 9, 13];
+    const bubbleNotes = [1567.98, 1864.66, 1318.51, 1760.00];
+
     startSequencer(stepMs, (step) => {
-        if (step === 0) synthChoir(261.63, stepDur * 8, 0.04, 0);
-        if (step % 4 === 0) synthVoice(bassNotes[(step / 4) % bassNotes.length], { type: 'triangle', dur: stepDur * 4.2, gain: 0.09, attack: 0.3, filterHz: 500 });
-        const drop = dropNotes[step % dropNotes.length];
-        if (drop) synthVoice(drop, { type: 'sine', dur: 0.5, gain: 0.06, attack: 0.005 });
-    }, 8);
+        if (step === 0) synthChoir(220.00, stepDur * 16, 0.04, 0); // 柔らかなコーラス風パッド
+        synthHarp(arp[step], stepDur * 1.2, 0.06, 0); // ハープ+高い弦のアルペジオ
+        if (step % 2 === 0) synthStrings(arp[step], stepDur * 1.0, 0.03, 0);
+        synthTimpani(58.27, stepDur * 0.95, 0.05, 0); // ドラムの回転を感じる一定の低音リズム(毎ステップ均一)
+        if (bellSteps.includes(step)) synthBell(1046.50 * 1.5, 1.0, 0.05, 0);
+        const bi = bubbleSteps.indexOf(step);
+        if (bi >= 0) synthVoice(bubbleNotes[bi], { type: 'sine', dur: 0.35, gain: 0.05, attack: 0.004 });
+    }, 16);
 }
 
 // 戦闘BGM（オリジナル）: intensity='normal'(通常)/'a'(Aランク=厚み追加)/'boss'(Sランク=最も壮大)
-function playBattleBGM(intensity) {
-    const stepMs = intensity === 'boss' ? 170 : (intensity === 'a' ? 140 : 150);
-    const stepDur = stepMs / 1000;
-    const bassNotes = [164.81, 164.81, 174.61, 164.81, 164.81, 164.81, 196.00, 174.61]; // E3系の緊張感あるベースライン
-    const melodyNotes = [0, 659.25, 0, 783.99, 0, 659.25, 0, 698.46]; // E5 . G5 . E5 . F5 の短い旋律断片
-
-    startSequencer(stepMs, (step) => {
-        const bassFreq = bassNotes[step];
-        synthVoice(bassFreq, { type: 'sawtooth', dur: stepDur * 0.9, gain: 0.15, attack: 0.005, filterHz: 500 });
-
-        const mel = melodyNotes[step];
-        if (mel) synthVoice(mel, { type: 'square', dur: stepDur * 0.5, gain: 0.10, attack: 0.005, filterHz: 2600 });
-
-        if (intensity === 'a' || intensity === 'boss') {
-            // Aランク以上: 短3度上のハーモニーと低いオクターブを重ねて音を厚くする
-            if (mel) synthVoice(mel * 1.1892, { type: 'square', dur: stepDur * 0.5, gain: 0.06, attack: 0.005, filterHz: 2600 });
-            if (step % 4 === 0) synthVoice(bassFreq / 2, { type: 'sawtooth', dur: stepDur * 1.6, gain: 0.08, attack: 0.02, filterHz: 400 });
-        }
-        if (intensity === 'boss') {
-            // Sランク/ボス戦: 重い低音・鐘・コーラス風の音色を加えて最も壮大にする
-            if (step % 2 === 0) synthSubBass(bassFreq / 2, stepDur * 1.4, 0.17, 0);
-            if (step % 4 === 0) synthBell(1046.50, 1.0, 0.09, 0);
-            if (step === 0) synthChoir(220.00, stepDur * 8, 0.045, 0);
-        }
-    }, 8);
+// 戦闘BGM（オリジナル、既存曲・有名曲の旋律は使用しない）
+// 通常戦=148BPM(速いドラム+低音+緊張感のある主旋律)
+// 強敵戦=156BPM(通常戦へ重い低音+金管風の音を追加)
+// ボス戦=166BPM(さらに厚いドラム+鐘+重い低音を追加)
+// ボス戦開始時だけ鳴らす専用ファンファーレ(約2秒、ループの外の単発サウンド)
+function playBossStartFanfare() {
+    synthTimpani(65.41, 0.5, 0.20, 0);
+    synthBrass(261.63, 0.45, 0.15, 0.05);
+    synthBrass(329.63, 0.45, 0.16, 0.28);
+    synthBrass(392.00, 0.5, 0.17, 0.50);
+    synthBrass(523.25, 0.9, 0.20, 0.72);
+    synthStrings(523.25, 0.9, 0.11, 0.72);
+    synthCymbal(0.13, 0.72);
+    synthTimpani(65.41, 0.7, 0.16, 1.15);
 }
 
-function playFastEpicBGM(isBattle = false) {
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    stopBGM();
+// 戦闘BGM（オリジナル、既存曲・有名曲の旋律・コード進行は使用しない）
+// 通常戦=152BPM / 強敵戦=160BPM(低音弦・金管・シンバルを追加) / ボス戦=168BPM(重いティンパニ・
+// 低音弦・金管の和音・高音弦の速い反復、開始時に約2秒の専用ファンファーレ)。
+// 強敵戦は敵HPが少なくなると打楽器が強まり、ボス戦はHP50%以下で金管・打楽器を追加、
+// 最終局面(HP20%以下)はテンポを変えず音の密度だけ上げる。
+function playBattleBGM(intensity) {
+    const bpm = intensity === 'boss' ? 168 : (intensity === 'a' ? 160 : 152);
+    const stepMs = 30000 / bpm; // 8分音符1つ分(2ステップ=1拍)
+    const stepDur = stepMs / 1000;
+    // 速い弦の刻み(緊張感のあるオリジナルの土台)
+    const stringPulse = [220.00, 220.00, 246.94, 220.00, 220.00, 220.00, 261.63, 246.94];
+    // ホルンの力強い短い主旋律(拍の隙間に鳴る)
+    const hornMotif = [0, 0, 659.25, 0, 0, 0, 783.99, 0];
 
+    const runLoop = () => {
+        startSequencer(stepMs, (step) => {
+            // 速い弦の刻み
+            synthStrings(stringPulse[step], stepDur * 0.85, 0.09, 0);
+            // 打楽器: スネアとティンパニを交互に
+            if (step % 2 === 0) synthTimpani(97.99, stepDur * 0.6, 0.12, 0);
+            else synthSnare(0.09, 0);
+            // ホルンの力強い短い主旋律
+            const hm = hornMotif[step];
+            if (hm) synthBrass(hm, stepDur * 1.3, 0.15, 0);
+
+            const hpRatio = (currentEnemy && currentEnemy.maxHp) ? currentEnemy.hp / currentEnemy.maxHp : 1;
+
+            if (intensity === 'a' || intensity === 'boss') {
+                // 強敵戦: 通常戦へ低音弦・金管・シンバルを追加
+                if (step % 4 === 0) synthSubBass(stringPulse[step] / 2, stepDur * 1.6, 0.10, 0);
+                if (hm) synthBrass(hm / 2, stepDur * 1.0, 0.08, 0.02);
+                if (step === 0) synthCymbal(0.07, 0);
+                if (hpRatio < 0.35) synthSnare(0.06, stepDur * 0.5); // 敵のHPが少なくなったら打楽器を少し強くする
+            }
+            if (intensity === 'boss') {
+                // ボス戦: 重いティンパニ・低音弦・金管の和音、高音弦の速い反復
+                synthTimpani(55.00, stepDur * 1.1, 0.14, 0);
+                synthSubBass(stringPulse[step] / 2, stepDur * 1.4, 0.10, 0);
+                synthStrings(stringPulse[step] * 2, stepDur * 0.5, 0.05, stepDur * 0.5);
+                if (hpRatio <= 0.5) {
+                    // HP50%以下: 金管と打楽器を一段追加
+                    synthBrass(392.00, stepDur * 0.9, 0.09, 0);
+                    synthSnare(0.08, stepDur * 0.25);
+                }
+                if (hpRatio <= 0.2) {
+                    // 最終局面: テンポは変えず、拍の合間に追加の打を挟んで密度だけ上げる
+                    synthTimpani(55.00, stepDur * 0.4, 0.09, stepDur * 0.5);
+                }
+            }
+        }, 8);
+    };
+
+    if (intensity === 'boss') {
+        playBossStartFanfare();
+        const t = setTimeout(() => { BGMManager._timeouts.delete(t); if (isBattling) runLoop(); }, 2000); // ファンファーレの後にループ開始(戦闘が続いている時だけ)
+        BGMManager.trackTimeout(t); // 途中で別のBGMに切り替わったらこの遅延開始は自動的に無効化される
+    } else {
+        runLoop();
+    }
+}
+
+// 召喚の祭壇の環境音(内容・テンポは変更しない)。BGMManager経由でtrackId='shop'として管理する。
+function startShopBGM() {
+    const shopNotes = [659.25, 880, 1046.5, 659.25, 880, 1046.5];
+    const tempo = 180;
+    let noteIdx = 0;
+    const id = setInterval(() => {
+        const osc = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        osc.type = 'sawtooth'; osc.frequency.value = shopNotes[noteIdx];
+        osc.connect(gainNode); gainNode.connect(audioCtx.destination);
+        const now = audioCtx.currentTime;
+        gainNode.gain.setValueAtTime(0.04, now);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, now + (tempo / 1000));
+        osc.start(now); osc.stop(now + (tempo / 1000));
+        BGMManager.registerNode(osc, gainNode, null);
+        noteIdx = (noteIdx + 1) % shopNotes.length;
+    }, tempo);
+    BGMManager.trackInterval(id);
+}
+
+// BGM切り替えの唯一の入口。isBattle引数から必要なtrackIdを決め、BGMManager.playBGM()へ委譲する。
+// 曲の内容・テンポ・分岐条件(敵ランクによる戦闘BGMの厚み等)は一切変更しない。
+function playFastEpicBGM(isBattle = false) {
     if (isBattle === 'shop') {
-        // 召喚の祭壇の環境音（変更しない）
-        const shopNotes = [659.25, 880, 1046.5, 659.25, 880, 1046.5];
-        const tempo = 180;
-        let noteIdx = 0;
-        bgmInterval = setInterval(() => {
-            const osc = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
-            osc.type = 'sawtooth'; osc.frequency.value = shopNotes[noteIdx];
-            osc.connect(gainNode); gainNode.connect(audioCtx.destination);
-            const now = audioCtx.currentTime;
-            gainNode.gain.setValueAtTime(0.04, now);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, now + (tempo / 1000));
-            osc.start(now); osc.stop(now + (tempo / 1000));
-            noteIdx = (noteIdx + 1) % shopNotes.length;
-        }, tempo);
+        BGMManager.playBGM('shop', startShopBGM);
         return;
     }
-
     if (isBattle) {
         // 敵ランク(C/A/S)に応じて戦闘BGMの厚みを変える。戦闘システム自体には触れない。
         const tier = currentEnemy && currentEnemy.tier;
         const intensity = tier === 'boss' ? 'boss' : (tier === 'mid' ? 'a' : 'normal');
-        playBattleBGM(intensity);
+        const trackId = intensity === 'boss' ? 'battle:boss' : (intensity === 'a' ? 'battle:elite' : 'battle:normal');
+        BGMManager.playBGM(trackId, () => playBattleBGM(intensity));
         return;
     }
-
     playFieldBGM();
 }
-function stopBGM() { if (bgmInterval) { clearInterval(bgmInterval); bgmInterval = null; } }
+// 互換用: 既存の呼び出し箇所からはそのまま使える。BGMManager.stop()へ委譲する。
+function stopBGM() { BGMManager.stop(); }
+
+function startBattleBGM() {
+    playFastEpicBGM(true); // 敵ランクに応じた戦闘BGMをBGMManager経由で1系統だけ再生する
+}
+// 戦闘終了時に呼ぶ: 現在のフィールド(currentFieldId)の曲へ、BGMManagerが1回だけ確実に切り替える。
+function endBattleBGM() {
+    playFieldBGM();
+}
 
 // フィールド拡張: field-expansion.jsのswitchFieldMusicが呼ぶブリッジ。
-// bgmIntervalは常に1系統しか持たないため二重再生はしない。600msでfieldMusicGainを
-// フェードアウト→(曲を差し替え)→フェードインし、視覚的な"クロスフェード"を再現する。
+// クロスフェードはせず、BGMManager.playBGM()に委譲して現在のフィールド曲を1系統だけ再生する。
 const audioBridge = {
     currentFieldMusicId: null,
     crossfadeTo(musicConfig, ms) {
-        const fadeSec = (ms || 600) / 1000;
-        const now = audioCtx.currentTime;
-        fieldMusicGain.gain.cancelScheduledValues(now);
-        fieldMusicGain.gain.setValueAtTime(fieldMusicGain.gain.value, now);
-        fieldMusicGain.gain.linearRampToValueAtTime(0.0001, now + fadeSec);
-        setTimeout(() => {
-            playFastEpicBGM(false); // GameState.currentFieldIdを見て正しいフィールド曲を1系統だけ再生する
-            const now2 = audioCtx.currentTime;
-            fieldMusicGain.gain.cancelScheduledValues(now2);
-            fieldMusicGain.gain.setValueAtTime(0.0001, now2);
-            fieldMusicGain.gain.linearRampToValueAtTime(1, now2 + fadeSec);
-        }, ms || 600);
+        playFieldBGM(); // GameState.currentFieldIdを見て正しいフィールド曲をBGMManager経由で1回だけ再生する
     }
 };
 
@@ -356,12 +599,11 @@ const RANK_BGM_PATTERNS = {
     SS: { notes: [783.99, 987.77, 1174.66, 987.77, 1318.51, 987.77, 1174.66, 880], tempo: 150, synthType: 'triangle', bass: true, harmony: true },
     SSS: { notes: [987.77, 1174.66, 1318.51, 1567.98, 1318.51, 1760, 1567.98, 1318.51, 1174.66, 1567.98, 1975.53, 1567.98], tempo: 110, synthType: 'sawtooth', bass: true, harmony: true, bell: true }
 };
+// BGMManager.playBGM()から呼ばれるstartFnの中でのみ使う想定(現在のBGM停止は既にBGMManager側で済んでいる)。
 function playRankSummonBGM(rankKey) {
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    stopBGM();
     const pattern = RANK_BGM_PATTERNS[rankKey] || RANK_BGM_PATTERNS.B;
     let noteIdx = 0;
-    bgmInterval = setInterval(() => {
+    const id = setInterval(() => {
         const freq = pattern.notes[noteIdx];
         const dur = pattern.tempo / 1000;
         const osc = audioCtx.createOscillator();
@@ -372,6 +614,7 @@ function playRankSummonBGM(rankKey) {
         gainNode.gain.setValueAtTime(0.05, now);
         gainNode.gain.exponentialRampToValueAtTime(0.001, now + dur);
         osc.start(now); osc.stop(now + dur);
+        BGMManager.registerNode(osc, gainNode, null);
 
         // レア度が高いほど同時に鳴る音を増やして豪華にする（テンポ・主旋律の周期は変えない）
         if (pattern.bass && noteIdx % 2 === 0) synthVoice(freq / 2, { type: 'triangle', dur: dur * 1.6, gain: 0.06, attack: 0.01 });
@@ -380,21 +623,25 @@ function playRankSummonBGM(rankKey) {
 
         noteIdx = (noteIdx + 1) % pattern.notes.length;
     }, pattern.tempo);
+    BGMManager.trackInterval(id);
 }
 
 // ==========================================
 // GAME STATE
 // ==========================================
 const GameState = {
-    avatar: { name: '', job: '', style: '', color: '#fff', hp: 100, maxHp: 100, mp: 50, agi: 30, tension: 0 },
+    avatar: { name: '', job: '', style: '', color: '#fff', hp: 100, maxHp: 100, mp: 50, maxMp: 50, agi: 30, tension: 0 },
     party: [], // {name, job, style, color, isDragon, originItem}
     listing: null, // {id, itemName, status:'listed'|'reviewed'|'completed', rewardClaimed}
     continents: ['封印の塔', 'カジュアル平原', '深淵の森', '荒野の砂漠', '古の山脈', 'アズライト中央大陸'],
     globalTime: 0,
     gold: 0,
+    // 所持アイテム: 回復薬(戦闘中に「アイテム(回復)」で実際に使用してHPを回復する)
+    items: { potion: 2 },
     // フィールド拡張: 現在地と、ボス撃破/討伐数などのワールド進行(localStorageへ保存)
     currentFieldId: 'azurlight',
-    worldProgress: { defeatedBosses: {}, killCounts: {} }
+    // laundry: 泡織りの洗濯広場用の追加セーブ項目(既存項目とは独立、既存の保存方式は変更しない)
+    worldProgress: { defeatedBosses: {}, killCounts: {}, laundry: { detergent: 0, freeRestUsed: false, totalWins: 0, spotWinsAtGather: [null, null, null] } }
 };
 let currentTrend = 'なし';
 
@@ -413,6 +660,14 @@ function loadWorldProgress() {
         if (parsed && typeof parsed === 'object') {
             GameState.worldProgress.defeatedBosses = parsed.defeatedBosses || {};
             GameState.worldProgress.killCounts = parsed.killCounts || {};
+            // laundry: 古いセーブデータ(この項目が無いもの)でも安全に初期値へフォールバックする
+            const savedLaundry = parsed.laundry || {};
+            GameState.worldProgress.laundry = {
+                detergent: typeof savedLaundry.detergent === 'number' ? savedLaundry.detergent : 0,
+                freeRestUsed: !!savedLaundry.freeRestUsed,
+                totalWins: typeof savedLaundry.totalWins === 'number' ? savedLaundry.totalWins : 0,
+                spotWinsAtGather: Array.isArray(savedLaundry.spotWinsAtGather) ? savedLaundry.spotWinsAtGather : [null, null, null]
+            };
         }
     } catch (e) { /* 壊れた保存データは無視して初期状態を使う */ }
 }
@@ -431,13 +686,457 @@ const FIELD_BG_IMAGES = {};
     });
 })();
 
+// ==========================================
+// フィールド画像パック(探索背景4枚・戦闘背景3枚)。差分追加のみ。
+// 既存のFIELD_BG_IMAGES/fx.drawAnimatedField(旧画像+既存の環境アニメーション)は変更・削除しない。
+// これらの新画像が読み込めなかった場合は、既存の描画へ自動的にフォールバックする。
+// 環境アニメーションは今回追加しない(静止画としてそのまま表示するだけ)。
+// ==========================================
+function loadBgImage(path) {
+    const img = new Image();
+    img.onerror = () => console.warn(`[field-visuals] 画像の読込に失敗: ${path}`);
+    img.src = path;
+    return img;
+}
+// 探索背景(800x600): fieldId → 新画像。回復の間(泡織りの洗濯広場)は別枠で持つ。
+const NEW_FIELD_BG_IMAGES = {
+    azurlight: loadBgImage('assets/backgrounds/field_grassland.png'),
+    wardrobe_gloomwood: loadBgImage('assets/backgrounds/field_dark_closet.png'),
+    laundry_abyss: loadBgImage('assets/backgrounds/field_washing_underwater.png')
+};
+const LAUNDRY_PLAZA_BG_IMG = loadBgImage('assets/backgrounds/field_recovery_room.png');
+// 戦闘背景(800x450): fieldId → 新画像。回復の間では戦闘が発生しないため用意しない。
+const BATTLE_BG_IMAGES = {
+    azurlight: loadBgImage('assets/battle_backgrounds/battle_grassland.png'),
+    wardrobe_gloomwood: loadBgImage('assets/battle_backgrounds/battle_dark_closet.png'),
+    laundry_abyss: loadBgImage('assets/battle_backgrounds/battle_washing_underwater.png')
+};
+// CSSのbackground-size:coverと同じ考え方で、縦横比を保ったまま中央基準にトリミングして描画する
+function drawCoverImage(ctxObj, img, dx, dy, dw, dh) {
+    const scale = Math.max(dw / img.naturalWidth, dh / img.naturalHeight);
+    const sw = dw / scale, sh = dh / scale;
+    const sx = (img.naturalWidth - sw) / 2, sy = (img.naturalHeight - sh) / 2;
+    ctxObj.imageSmoothingEnabled = false; // pixelatedを維持する
+    ctxObj.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
+// ==========================================
+// 環境アニメーション専用レイヤー(FieldAmbientAnimation)
+// 背景PNGの上・キャラクターと敵の下にだけ描画する共通管理処理。
+// 4ステージ+回復の間をこの1つのオブジェクトで扱い、現在のfieldId/isInLaundryPlazaで
+// 表示内容を切り替える。ゲーム機能・座標・当たり判定・BGM・セーブデータ・戦闘処理には
+// 一切触れない。状態更新(tick)は6〜12fps相当に間引き、描画(draw)は既存のdrawGame()の
+// 中で毎フレーム呼ばれる(＝キャラクター・敵より前へは描画されない)。
+// ==========================================
+const FieldAmbientAnimation = {
+    rafId: null,
+    currentKey: null, // 'azurlight' | 'wardrobe_gloomwood' | 'laundry_abyss' | 'laundry_plaza' | null
+    lastTickAt: 0,
+    tickMs: 110, // 約9fps相当のカクカクした更新間隔
+    state: null,
+
+    start(key) {
+        if (this.currentKey === key && this.rafId !== null) return; // 同じステージなら再起動しない(重複防止)
+        this.stop(); // ステージ移動時は前のrequestAnimationFrameを必ず止める
+        this.currentKey = key;
+        this.state = this._createState(key);
+        this.lastTickAt = 0;
+        const loop = (now) => {
+            this.rafId = requestAnimationFrame(loop);
+            // メニュー表示中・ショップ・凱旋の儀・タブ非表示中は状態更新を一時停止する(描画自体は既存のdrawGame任せ)
+            if (isMenuOpen || isShopOpen || isFashionShow || document.hidden) return;
+            if (now - this.lastTickAt < this.tickMs) return;
+            this.lastTickAt = now;
+            this._tick();
+        };
+        this.rafId = requestAnimationFrame(loop);
+    },
+
+    stop() {
+        if (this.rafId !== null) { cancelAnimationFrame(this.rafId); this.rafId = null; }
+        this.currentKey = null;
+        this.state = null;
+    },
+
+    _createState(key) {
+        if (key === 'azurlight') return this._createGrasslandState();
+        if (key === 'wardrobe_gloomwood') return this._createClosetState();
+        if (key === 'laundry_abyss') return this._createUnderwaterState();
+        if (key === 'laundry_plaza') return this._createPlazaState();
+        return null;
+    },
+
+    _tick() {
+        if (!this.state) return;
+        if (this.currentKey === 'azurlight') this._tickGrassland();
+        else if (this.currentKey === 'wardrobe_gloomwood') this._tickCloset();
+        else if (this.currentKey === 'laundry_abyss') this._tickUnderwater();
+        else if (this.currentKey === 'laundry_plaza') this._tickPlaza();
+    },
+
+    // ctxObj: 描画先。isBattling: 戦闘背景では粒子数を半分にする。
+    draw(ctxObj, isBattling) {
+        if (!this.state) return;
+        ctxObj.imageSmoothingEnabled = false;
+        if (this.currentKey === 'azurlight') this._drawGrassland(ctxObj, isBattling);
+        else if (this.currentKey === 'wardrobe_gloomwood') this._drawCloset(ctxObj, isBattling);
+        else if (this.currentKey === 'laundry_abyss') this._drawUnderwater(ctxObj, isBattling);
+        else if (this.currentKey === 'laundry_plaza') this._drawPlaza(ctxObj);
+    },
+
+    // ------------------------------------------------------------
+    // 草原(azurlight)
+    // ------------------------------------------------------------
+    _createGrasslandState() {
+        // リボン草: 左右へ2〜3px、3段階で揺れる(開始タイミングをずらす)
+        const ribbons = [
+            { x: 310, y: 190, phase: 0 },
+            { x: 563, y: 335, phase: 3 },
+            { x: 293, y: 528, phase: 6 },
+            { x: 30, y: 178, phase: 9 }
+        ].map(r => ({ ...r, step: 0 }));
+        // ボタン花: 1pxだけ上下する
+        const buttonFlowers = [
+            { x: 150, y: 22, phase: 1 }, { x: 365, y: 16, phase: 4 }, { x: 565, y: 26, phase: 2 },
+            { x: 180, y: 226, phase: 7 }, { x: 700, y: 82, phase: 5 }, { x: 620, y: 531, phase: 8 }
+        ].map(f => ({ ...f, up: false }));
+        // 池: 短い水色ドットを周回させる
+        const ponds = [
+            { x: 545, y: 95, r: 46 }, { x: 120, y: 410, r: 56 }, { x: 635, y: 470, r: 34 }
+        ].map(p => ({ ...p, dotAngle: Math.random() * Math.PI * 2 }));
+        // 黄色い糸くず: 最大4個だけ漂う
+        const threads = [];
+        for (let i = 0; i < 4; i++) threads.push(this._spawnGrassThread(i * 40));
+        return { ribbons, buttonFlowers, ponds, threads, frame: 0 };
+    },
+
+    _spawnGrassThread(delayTick) {
+        return {
+            x: 40 + Math.random() * 720, y: 40 + Math.random() * 520,
+            vx: (Math.random() < 0.5 ? -1 : 1) * (0.6 + Math.random() * 0.6),
+            vy: -(0.3 + Math.random() * 0.4),
+            life: 60 + Math.floor(Math.random() * 40),
+            delay: delayTick
+        };
+    },
+
+    _tickGrassland() {
+        const s = this.state; s.frame++;
+        s.ribbons.forEach(r => { r.step = Math.floor((s.frame + r.phase) / 4) % 3; }); // 3段階(0,1,2)を順に
+        s.buttonFlowers.forEach(f => { if ((s.frame + f.phase) % 6 === 0) f.up = !f.up; });
+        s.ponds.forEach(p => { p.dotAngle += 0.35; });
+        s.threads.forEach((th, i) => {
+            if (th.delay > 0) { th.delay--; return; }
+            th.x += th.vx; th.y += th.vy; th.life--;
+            if (th.life <= 0 || th.x < -10 || th.x > 810 || th.y < -10) s.threads[i] = this._spawnGrassThread(0);
+        });
+    },
+
+    _drawGrassland(ctxObj, isBattling) {
+        const s = this.state;
+        const densityScale = isBattling ? 0.5 : 1;
+
+        // リボン草: 左右2〜3pxの3段階スイング(四角いドットで表現)
+        ctxObj.fillStyle = '#2f6b2a';
+        s.ribbons.forEach(r => {
+            const dx = [-3, 0, 2][r.step];
+            for (let i = 0; i < 4; i++) ctxObj.fillRect(r.x + dx + i * 3 - 6, r.y - i * 4, 3, 4);
+        });
+
+        // ボタン花: 1px上下
+        ctxObj.fillStyle = '#ffe066';
+        s.buttonFlowers.forEach(f => { ctxObj.fillRect(f.x - 2, f.y + (f.up ? -1 : 0), 4, 4); });
+
+        // 池: 短い水色ドットの流れ(戦闘中は本数を半分にする)
+        ctxObj.fillStyle = 'rgba(190,255,246,0.85)';
+        s.ponds.forEach(p => {
+            const dotCount = Math.max(1, Math.round(3 * densityScale));
+            for (let i = 0; i < dotCount; i++) {
+                const a = p.dotAngle + (i * Math.PI * 2) / dotCount;
+                const px = p.x + Math.cos(a) * p.r * 0.6, py = p.y + Math.sin(a) * p.r * 0.35;
+                ctxObj.fillRect(Math.round(px), Math.round(py), 2, 2);
+            }
+        });
+
+        // 黄色い糸くず(最大4個、戦闘中は半分)
+        ctxObj.fillStyle = '#f4d35e';
+        const threadLimit = Math.max(1, Math.round(s.threads.length * densityScale));
+        for (let i = 0; i < threadLimit; i++) {
+            const th = s.threads[i];
+            if (th.delay > 0) continue;
+            ctxObj.fillRect(Math.round(th.x), Math.round(th.y), 3, 3);
+        }
+    },
+
+    // ------------------------------------------------------------
+    // 闇の森(wardrobe_gloomwood)
+    // ------------------------------------------------------------
+    _createClosetState() {
+        // コートの裾・空の袖: 左右2pxスイング(開始をずらす)
+        const hems = [
+            { x: 40, y: 470, phase: 0 }, { x: 155, y: 495, phase: 2 }, { x: 65, y: 150, phase: 5 },
+            { x: 700, y: 470, phase: 1 }, { x: 755, y: 150, phase: 4 }, { x: 625, y: 465, phase: 3 }
+        ].map(h => ({ ...h }));
+        // 金色のボタン光: 最大8個、漂う
+        const buttonLightsBase = [
+            { x: 300, y: 65 }, { x: 185, y: 155 }, { x: 135, y: 205 }, { x: 595, y: 190 },
+            { x: 628, y: 340 }, { x: 105, y: 400 }, { x: 645, y: 470 }, { x: 315, y: 490 }
+        ];
+        const buttonLights = buttonLightsBase.map((b, i) => ({
+            baseX: b.x, baseY: b.y, x: b.x, y: b.y, phase: i * 2, driftAngle: Math.random() * Math.PI * 2
+        }));
+        // 紫色の糸粒子: 最大6個、ゆっくり落ちる
+        const purpleThreads = [];
+        for (let i = 0; i < 6; i++) purpleThreads.push(this._spawnClosetThread(i * 30));
+        return { hems, buttonLights, purpleThreads, doorGlow: 0.4, frame: 0 };
+    },
+
+    _spawnClosetThread(delayTick) {
+        return {
+            x: 40 + Math.random() * 720, y: -10,
+            vy: 0.25 + Math.random() * 0.25,
+            life: 140 + Math.floor(Math.random() * 60),
+            delay: delayTick
+        };
+    },
+
+    _tickCloset() {
+        const s = this.state; s.frame++;
+        s.hems.forEach(h => { h.step = Math.floor((s.frame + h.phase) / 5) % 3; });
+        s.buttonLights.forEach(b => {
+            b.driftAngle += 0.12;
+            b.x = b.baseX + Math.round(Math.cos(b.driftAngle) * 3);
+            b.y = b.baseY + Math.round(Math.sin(b.driftAngle) * 3);
+        });
+        s.purpleThreads.forEach((th, i) => {
+            if (th.delay > 0) { th.delay--; return; }
+            th.y += th.vy; th.life--;
+            if (th.life <= 0 || th.y > 610) s.purpleThreads[i] = this._spawnClosetThread(0);
+        });
+        // 扉の隙間: 弱い明滅(サインカーブ)
+        s.doorGlow = 0.25 + (Math.sin(s.frame * 0.15) + 1) / 2 * 0.35;
+    },
+
+    _drawCloset(ctxObj, isBattling) {
+        const s = this.state;
+        const densityScale = isBattling ? 0.5 : 1;
+
+        // コートの裾・袖: 左右2pxスイング
+        ctxObj.fillStyle = 'rgba(20,10,40,0.55)';
+        s.hems.forEach(h => {
+            const dx = [-2, 0, 2][h.step || 0];
+            for (let i = 0; i < 3; i++) ctxObj.fillRect(h.x + dx - 3, h.y + i * 3, 6, 3);
+        });
+
+        // クローゼット扉の隙間の明滅
+        ctxObj.save();
+        ctxObj.globalAlpha = s.doorGlow;
+        ctxObj.fillStyle = '#ffd76a';
+        ctxObj.fillRect(398, 20, 4, 46);
+        ctxObj.restore();
+
+        // 金色のボタン光(最大8個、戦闘中は半分)
+        ctxObj.fillStyle = '#ffcf4d';
+        const lightLimit = Math.max(1, Math.round(s.buttonLights.length * densityScale));
+        for (let i = 0; i < lightLimit; i++) {
+            const b = s.buttonLights[i];
+            ctxObj.fillRect(Math.round(b.x) - 2, Math.round(b.y) - 2, 4, 4);
+        }
+
+        // 紫色の糸粒子(最大6個、戦闘中は半分)
+        ctxObj.fillStyle = '#b98cf0';
+        const threadLimit = Math.max(1, Math.round(s.purpleThreads.length * densityScale));
+        for (let i = 0; i < threadLimit; i++) {
+            const th = s.purpleThreads[i];
+            if (th.delay > 0) continue;
+            ctxObj.fillRect(Math.round(th.x), Math.round(th.y), 3, 3);
+        }
+    },
+
+    // ------------------------------------------------------------
+    // 水中・洗濯機(laundry_abyss)
+    // ------------------------------------------------------------
+    _createUnderwaterState() {
+        // 気泡: 画面下と排水口(中央上部のハブ)から上昇させる。探索中は最大20個。
+        const bubbles = [];
+        for (let i = 0; i < 20; i++) bubbles.push(this._spawnUnderwaterBubble(i * 8));
+        // 泡の水流: ドラム中央の楕円パスに沿って回転方向(時計回り)へ流す
+        const flowDots = [];
+        for (let i = 0; i < 10; i++) flowDots.push({ angle: (i / 10) * Math.PI * 2 });
+        // ドラム穴の光: 周囲に配置し、順番に明滅させる
+        const drumLights = [
+            { x: 60, y: 60 }, { x: 220, y: 25 }, { x: 400, y: 15 }, { x: 580, y: 25 },
+            { x: 740, y: 60 }, { x: 40, y: 300 }, { x: 760, y: 300 }, { x: 400, y: 585 }
+        ].map((d, i) => ({ ...d, idx: i }));
+        // リボン状の布(4隅)
+        const ribbons = [{ x: 90, y: 470 }, { x: 730, y: 470 }, { x: 90, y: 130 }, { x: 715, y: 130 }];
+        return { bubbles, flowDots, drumLights, ribbons, litIndex: 0, frame: 0 };
+    },
+
+    _spawnUnderwaterBubble(delayTick) {
+        const fromDrain = Math.random() < 0.25;
+        return {
+            x: fromDrain ? 385 + Math.random() * 30 : 20 + Math.random() * 760,
+            y: fromDrain ? 65 : 590 + Math.random() * 10,
+            vy: -(0.5 + Math.random() * 0.6),
+            life: 90 + Math.floor(Math.random() * 60),
+            delay: delayTick
+        };
+    },
+
+    _tickUnderwater() {
+        const s = this.state; s.frame++;
+        s.bubbles.forEach((b, i) => {
+            if (b.delay > 0) { b.delay--; return; }
+            b.y += b.vy; b.life--;
+            if (b.life <= 0 || b.y < -10) s.bubbles[i] = this._spawnUnderwaterBubble(0);
+        });
+        s.flowDots.forEach(f => { f.angle += 0.12; }); // ドラムの回転方向(時計回り)へ流す
+        if (s.frame % 4 === 0) s.litIndex = (s.litIndex + 1) % s.drumLights.length; // 順番に明滅
+    },
+
+    _drawUnderwater(ctxObj, isBattling) {
+        const s = this.state;
+        const densityScale = isBattling ? 0.6 : 1; // 探索20個/戦闘12個 相当
+
+        // 気泡(四角いドット)
+        ctxObj.fillStyle = 'rgba(230,250,255,0.9)';
+        const bubbleLimit = isBattling ? 12 : 20;
+        for (let i = 0; i < Math.min(bubbleLimit, s.bubbles.length); i++) {
+            const b = s.bubbles[i];
+            if (b.delay > 0) continue;
+            ctxObj.fillRect(Math.round(b.x), Math.round(b.y), 3, 3);
+        }
+
+        // 白い泡の水流: 中央の楕円パスをドラムの回転方向へ
+        ctxObj.fillStyle = 'rgba(255,255,255,0.65)';
+        const flowLimit = Math.max(1, Math.round(s.flowDots.length * densityScale));
+        for (let i = 0; i < flowLimit; i++) {
+            const f = s.flowDots[i];
+            const fx = 400 + Math.cos(f.angle) * 190, fy = 300 + Math.sin(f.angle) * 130;
+            ctxObj.fillRect(Math.round(fx), Math.round(fy), 2, 2);
+        }
+
+        // ドラム穴の光: 順番に明滅
+        s.drumLights.forEach(d => {
+            ctxObj.save();
+            ctxObj.globalAlpha = d.idx === s.litIndex ? 0.9 : 0.25;
+            ctxObj.fillStyle = '#bfe9ff';
+            ctxObj.fillRect(d.x - 2, d.y - 2, 4, 4);
+            ctxObj.restore();
+        });
+
+        // リボン状の布: 左右へゆっくり揺らす
+        ctxObj.fillStyle = 'rgba(150,110,220,0.55)';
+        s.ribbons.forEach((r, i) => {
+            const dx = Math.round(Math.sin(s.frame * 0.05 + i) * 2);
+            for (let j = 0; j < 3; j++) ctxObj.fillRect(r.x + dx - 4 + j * 3, r.y + j * 3, 3, 3);
+        });
+    },
+
+    // ------------------------------------------------------------
+    // 回復の間(laundry_plaza / 泡織りの洗濯広場)
+    // ------------------------------------------------------------
+    _createPlazaState() {
+        const fountain = { x: 400, y: 190 };
+        // 洗剤採取スポットは既存のLAUNDRY_SPOT_ZONES(座標は変更しない)を中心座標として再利用する
+        const spots = (typeof LAUNDRY_SPOT_ZONES !== 'undefined' ? LAUNDRY_SPOT_ZONES : []).map(z => ({
+            x: z.x + z.w / 2, y: z.y + z.h / 2
+        }));
+        const bubbles = [];
+        for (let i = 0; i < 12; i++) bubbles.push(this._spawnPlazaBubble(i * 10));
+        return { fountain, spots, bubbles, fountainFrame: 0, blinkIndex: 0, curtainStep: 0, frame: 0 };
+    },
+
+    _spawnPlazaBubble(delayTick) {
+        const colors = ['#ffb3d9', '#a9e6ff', '#ffffff'];
+        return {
+            x: 340 + Math.random() * 120, y: 220 + Math.random() * 20,
+            vy: -(0.4 + Math.random() * 0.5),
+            color: colors[Math.floor(Math.random() * colors.length)],
+            life: 70 + Math.floor(Math.random() * 50),
+            delay: delayTick
+        };
+    },
+
+    _tickPlaza() {
+        const s = this.state; s.frame++;
+        if (s.frame % 5 === 0) s.fountainFrame = (s.fountainFrame + 1) % 4; // 4コマ風に回転
+        if (s.frame % 8 === 0) s.blinkIndex = (s.blinkIndex + 1) % Math.max(1, s.spots.length); // 3スポットを順番に明滅
+        s.curtainStep = Math.floor(s.frame / 6) % 3;
+        const healing = typeof laundryHealEffectTimer !== 'undefined' && laundryHealEffectTimer > 0;
+        s.bubbles.forEach((b, i) => {
+            if (b.delay > 0) { b.delay--; return; }
+            b.y += b.vy * (healing ? 1.8 : 1); b.life--; // 回復実行中は泡の動きを少し速める
+            if (b.life <= 0 || b.y < -10) s.bubbles[i] = this._spawnPlazaBubble(0);
+        });
+    },
+
+    _drawPlaza(ctxObj) {
+        const s = this.state;
+        const healing = typeof laundryHealEffectTimer !== 'undefined' && laundryHealEffectTimer > 0;
+
+        // 中央の回復泉: 4コマ風の回転(四角ドットを周回させて表現)
+        ctxObj.fillStyle = '#bfe9ff';
+        for (let i = 0; i < 4; i++) {
+            const a = (s.fountainFrame / 4) * Math.PI * 2 + (i * Math.PI) / 2;
+            const fx = s.fountain.x + Math.cos(a) * 20, fy = s.fountain.y + Math.sin(a) * 12;
+            ctxObj.fillRect(Math.round(fx) - 2, Math.round(fy) - 2, 4, 4);
+        }
+
+        // 桃色・水色・白の泡(最大12個。回復実行時は少し数を増やす)
+        const bubbleLimit = healing ? 12 : 9;
+        for (let i = 0; i < Math.min(bubbleLimit, s.bubbles.length); i++) {
+            const b = s.bubbles[i];
+            if (b.delay > 0) continue;
+            ctxObj.fillStyle = b.color;
+            ctxObj.fillRect(Math.round(b.x), Math.round(b.y), 3, 3);
+        }
+
+        // 3つの洗剤採取スポットを順番に明滅
+        s.spots.forEach((sp, i) => {
+            ctxObj.save();
+            ctxObj.globalAlpha = i === s.blinkIndex ? 0.9 : 0.35;
+            ctxObj.fillStyle = '#fff6c9';
+            ctxObj.fillRect(sp.x - 2, sp.y - 2, 4, 4);
+            ctxObj.restore();
+        });
+
+        // 下のカーテン: 左右2pxスイング
+        ctxObj.fillStyle = 'rgba(40,110,100,0.45)';
+        const cdx = [-2, 0, 2][s.curtainStep];
+        for (let i = 0; i < 6; i++) ctxObj.fillRect(340 + i * 20 + cdx - 3, 560, 6, 4);
+
+        // 回復実行時だけ: 白い光の輪
+        if (healing) {
+            const p = 1 - laundryHealEffectTimer / 45;
+            ctxObj.save();
+            ctxObj.globalAlpha = 0.4 * (1 - p);
+            ctxObj.strokeStyle = '#ffffff'; ctxObj.lineWidth = 3;
+            ctxObj.beginPath(); ctxObj.arc(s.fountain.x, s.fountain.y, 20 + p * 90, 0, Math.PI * 2); ctxObj.stroke();
+            ctxObj.restore();
+        }
+    }
+};
+
 function updateGold(amount) {
     GameState.gold += amount;
     document.getElementById('ui-gold').textContent = GameState.gold;
     document.getElementById('menu-gold').textContent = GameState.gold;
 }
 
-const ALL_STYLES = ['炎', '氷', '雷', '光', '闇'];
+const ALL_STYLES = ['炎', '氷', '雷', '光', '闇', '草', '水'];
+// 属性の三すくみ(火は草に強い→草は水に強い→水は火に強い)。既存の"炎"を火属性として扱う。
+// この3属性同士の組み合わせだけで有利・不利が発生し、氷・雷・光・闇はこれまで通り無属性(等倍)のまま。
+const ELEMENT_ADVANTAGE = { '炎': '草', '草': '水', '水': '炎' };
+// 攻撃側の属性(attackerStyle)が防御側の属性(defenderStyle)に有利/不利かでダメージ倍率を返す。
+// 既存の「属性一致連携(Perfect Fit)」とは別の仕組みで、通常攻撃・仲間の攻撃・敵の反撃すべてに適用する。
+function getElementMultiplier(attackerStyle, defenderStyle) {
+    if (!attackerStyle || !defenderStyle) return 1;
+    if (ELEMENT_ADVANTAGE[attackerStyle] === defenderStyle) return 1.5; // 有利属性
+    if (ELEMENT_ADVANTAGE[defenderStyle] === attackerStyle) return 0.7; // 不利属性
+    return 1; // それ以外(同属性・無関係属性)は等倍
+}
 const JOB_TEMPLATES = [
     { type: '影縫いの外套', job: '仕立騎士', style: '闇', color: '#2b2038', prefix: '影縫いの' },
     { type: '純白の星布', job: '染織師', style: '光', color: '#eeeeee', prefix: '純白の' },
@@ -451,10 +1150,12 @@ function analyzeImageFast() {
         setTimeout(() => {
             const template = JOB_TEMPLATES[Math.floor(Math.random() * JOB_TEMPLATES.length)];
             const baseNames = ['アルテア', 'ヴァルム', 'シグナ', 'エルダー', 'ノクス', 'フィオル'];
+            const rolledHp = Math.floor(Math.random() * 80) + 100;
+            const rolledMp = Math.floor(Math.random() * 80) + 50;
             resolve({
                 name: `${template.prefix}紋章・${baseNames[Math.floor(Math.random() * baseNames.length)]}`,
                 job: template.job, style: template.style,
-                hp: Math.floor(Math.random() * 80) + 100, maxHp: 100, mp: Math.floor(Math.random() * 80) + 50, agi: Math.floor(Math.random() * 80) + 50,
+                hp: rolledHp, maxHp: rolledHp, mp: rolledMp, maxMp: rolledMp, agi: Math.floor(Math.random() * 80) + 50,
                 color: template.color,
                 tension: 0
             });
@@ -511,6 +1212,313 @@ const ALLY_VISUALS = {
 };
 
 // ==========================================
+// アステア専用の通常表示画像（他の仲間・機能には影響させない）
+// party_special_actions.png は6列×3行、1行目=アステア。先頭コマ(0,0)だけを通常表示に使う。
+// 名前・ランク・レベル・能力値・セーブデータは変更しない。表示（見た目）だけを追加する。
+// ==========================================
+const ASTERIA_NAME = '虹染めの術師・アステア';
+const ASTERIA_PORTRAIT_PATH = 'assets/sprites/actions/party_special_actions.png';
+const ASTERIA_ATLAS_COLS = 6, ASTERIA_ATLAS_ROWS = 3;
+const asteriaPortraitImg = new Image();
+asteriaPortraitImg.onerror = () => console.warn(`[asteria] 画像の読込に失敗: ${ASTERIA_PORTRAIT_PATH}`);
+asteriaPortraitImg.src = ASTERIA_PORTRAIT_PATH;
+
+// ==========================================
+// アステア専用スキル演出 (party_special_actions.png 1行目, 6コマ)
+// 構え → 詠唱 → 魔力を溜める → 虹色の染料を回す → プリズム攻撃 → 復帰
+// ダメージ計算式・MP消費・スキル効果自体はここでは一切変更しない。
+// 「いつ・どう見せるか」の演出タイミングだけを追加し、命中(5コマ目)で1回だけダメージを適用する。
+// ==========================================
+const ASTERIA_SKILL_FRAMES = ['ready', 'charge_1', 'charge_2', 'action', 'impact', 'recover'];
+const ASTERIA_SKILL_GLOW_COLORS = ['#ff8fd6', '#7fe0ff', '#ffe066']; // 桃色・水色・黄色
+let asteriaSkillActive = false;      // true の間、連打による二重発動を防止する
+let asteriaSkillFrameIndex = -1;     // -1: 通常表示(先頭コマ) / 0-5: 演出中の再生コマ
+let asteriaSkillFloatY = 0;          // 浮遊オフセット(px)
+let asteriaSkillGlowColor = null;    // 発光の現在色(null なら発光なし)
+
+// アステアのスキル演出を再生し、5コマ目(プリズム攻撃 = impact)の命中時にだけ
+// applyDamageToEnemy を1回呼び出す。既存のダメージ計算式(rawDmg)や貫通判定(isPiercing)は
+// 呼び出し元(commandAllyAttack)からそのまま受け取るだけで変更しない。
+function playAsteriaSkillSequence(ally, rawDmg, isPiercing, onComplete) {
+    if (asteriaSkillActive) return; // 保険: 既に演出中なら何もしない(二重発動防止)
+    asteriaSkillActive = true;
+    asteriaSkillFrameIndex = 0;
+    asteriaSkillFloatY = 14; // 少し浮く
+    playSound('magic');
+
+    const CHARGE_MS = 500;      // 約0.5秒、光を溜める
+    const FRAME_MS = 140;       // 6コマ再生の1コマあたりの時間
+    let glowStep = 0;
+    asteriaSkillGlowColor = ASTERIA_SKILL_GLOW_COLORS[0];
+    const glowInterval = setInterval(() => {
+        glowStep++;
+        asteriaSkillGlowColor = ASTERIA_SKILL_GLOW_COLORS[glowStep % ASTERIA_SKILL_GLOW_COLORS.length];
+    }, Math.round(CHARGE_MS / ASTERIA_SKILL_GLOW_COLORS.length));
+
+    setTimeout(() => {
+        clearInterval(glowInterval);
+        let damageApplied = false; // 5コマ目で1回だけダメージを適用するためのガード
+
+        ASTERIA_SKILL_FRAMES.forEach((frameName, i) => {
+            setTimeout(() => {
+                if (!asteriaSkillActive) return; // 演出が既に終了していたら何もしない
+                asteriaSkillFrameIndex = i;
+                asteriaSkillGlowColor = ASTERIA_SKILL_GLOW_COLORS[i % ASTERIA_SKILL_GLOW_COLORS.length];
+
+                if (frameName === 'action' && currentEnemy) {
+                    // 敵の位置で虹色の円形エフェクト(3色を同位置から放射)
+                    ASTERIA_SKILL_GLOW_COLORS.forEach(c => spawnMagicParticles(600, 380, 600, 380, c));
+                    playSound('magic');
+                }
+
+                if (frameName === 'impact' && !damageApplied && currentEnemy) {
+                    damageApplied = true; // ダメージは1回だけ
+                    screenShakeTimer = Math.max(screenShakeTimer, 14);
+                    const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
+                    updateHPUI();
+                    if (currentEnemy.sprite) {
+                        // hitStopFrames:5 ≈ 約85ms(60fps換算)、左右への揺れはknockback(toX)で表現
+                        currentEnemy.sprite.triggerHit({ hitStopFrames: 5, flashFrames: 16, knockbackPower: 10, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
+                    }
+                    if (blocked) {
+                        showDamage(600, 360, 0);
+                        bMsg.textContent = `🛡️ ${ally.name}の攻撃は障壁に阻まれた！ スキルか属性連携で破れ！`;
+                    } else {
+                        showDamage(600, 360, dmg);
+                        bMsg.textContent = isPiercing ? `✨${ally.name}の虹染めの奥義！ ${dmg}のダメージ！` : `✨${ally.name}の虹染めの奥義！ ${dmg}のダメージ！`;
+                    }
+                }
+            }, FRAME_MS * i);
+        });
+
+        setTimeout(() => {
+            // 演出終了: アステアを元の通常表示(先頭コマ)・位置へ戻す
+            asteriaSkillActive = false;
+            asteriaSkillFrameIndex = -1;
+            asteriaSkillFloatY = 0;
+            asteriaSkillGlowColor = null;
+            onComplete();
+        }, FRAME_MS * ASTERIA_SKILL_FRAMES.length + 80);
+    }, CHARGE_MS);
+}
+
+// ==========================================
+// ルーナ専用スキル演出 (party_special_actions.png 2行目, 6コマ。アステアの演出・画像処理には触れない)
+// 構え → 弓を引く → 黄金の力を溜める → 採寸矢を放つ → 命中 → 復帰
+// ダメージ計算式・MP消費・スキル効果自体はここでは一切変更しない。
+// 「いつ・どう見せるか」の演出タイミングだけを追加し、命中(5コマ目)で1回だけダメージを適用する。
+// ==========================================
+const LUNA_NAME = '若葉布の採寸弓師・ルーナ';
+const LUNA_ATLAS_ROW = 1; // 2行目 = ルーナ (0行目=アステア)
+const LUNA_SKILL_FRAMES = ['ready', 'charge_1', 'charge_2', 'action', 'impact', 'recover'];
+const LUNA_SKILL_GLOW_COLOR = '#ffe066'; // 黄色いメジャー状の光
+let lunaSkillActive = false;       // true の間、連打による二重発動を防止する
+let lunaSkillFrameIndex = -1;      // -1: 通常表示(ally_archer.png) / 0-5: 演出中の再生コマ
+let lunaSkillGlowColor = null;     // 発光の現在色(null なら発光なし)
+let lunaImpactEffectTimer = 0;     // 命中時、敵の位置に黄色い円+目盛りを描く残りフレーム数
+
+function playLunaSkillSequence(ally, rawDmg, isPiercing, onComplete) {
+    if (lunaSkillActive) return; // 保険: 既に演出中なら何もしない(二重発動防止)
+    lunaSkillActive = true;
+    lunaSkillFrameIndex = 0; // 構え
+    lunaSkillGlowColor = LUNA_SKILL_GLOW_COLOR;
+    playSound('select');
+
+    const CHARGE_MS = 500;   // 約0.5秒、黄色いメジャー状の光を溜める
+    const FRAME_MS = 140;    // 6コマ再生の1コマあたりの時間
+
+    setTimeout(() => {
+        if (!lunaSkillActive) return;
+        lunaSkillFrameIndex = 1; // 弓を引く(溜め中の中間ポーズ)
+    }, Math.round(CHARGE_MS / 2));
+
+    setTimeout(() => {
+        let damageApplied = false; // 5コマ目で1回だけダメージを適用するためのガード
+
+        LUNA_SKILL_FRAMES.forEach((frameName, i) => {
+            setTimeout(() => {
+                if (!lunaSkillActive) return; // 演出が既に終了していたら何もしない
+                lunaSkillFrameIndex = i;
+
+                if (frameName === 'action' && currentEnemy) {
+                    // 黄金の採寸矢を敵へ高速で飛ばす
+                    playSound('slash');
+                    spawnMagicParticles(200, 300, 600, 380, '#ffe066');
+                }
+
+                if (frameName === 'impact' && !damageApplied && currentEnemy) {
+                    damageApplied = true; // ダメージは1回だけ
+                    screenShakeTimer = Math.max(screenShakeTimer, 14);
+                    lunaImpactEffectTimer = 16; // 敵の位置に黄色い円+目盛りエフェクト
+                    const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
+                    updateHPUI();
+                    if (currentEnemy.sprite) {
+                        // hitStopFrames:5 ≈ 約85ms(60fps換算)、左右への揺れはknockback(toX)で表現
+                        currentEnemy.sprite.triggerHit({ hitStopFrames: 5, flashFrames: 16, knockbackPower: 8, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
+                    }
+                    if (blocked) {
+                        showDamage(600, 360, 0);
+                        bMsg.textContent = `🛡️ ${ally.name}の攻撃は障壁に阻まれた！ スキルか属性連携で破れ！`;
+                    } else {
+                        showDamage(600, 360, dmg);
+                        bMsg.textContent = isPiercing ? `🏹${ally.name}の採寸の奥義！ ${dmg}のダメージ！` : `🏹${ally.name}の採寸の奥義！ ${dmg}のダメージ！`;
+                    }
+                }
+            }, FRAME_MS * i);
+        });
+
+        setTimeout(() => {
+            // 演出終了: ルーナを元の通常表示(ally_archer.png)・位置へ戻す
+            lunaSkillActive = false;
+            lunaSkillFrameIndex = -1;
+            lunaSkillGlowColor = null;
+            onComplete();
+        }, FRAME_MS * LUNA_SKILL_FRAMES.length + 80);
+    }, CHARGE_MS);
+}
+
+// ==========================================
+// ゾン専用スキル演出 (party_special_actions.png 3行目, 6コマ。アステア・ルーナの演出・画像処理には触れない)
+// 構え → 低く溜める → 敵へ突進 → 双鋏で回転攻撃 → X字の裁断エフェクト → 復帰
+// ダメージ計算式・MP消費・スキル効果自体はここでは一切変更しない。
+// 「いつ・どう見せるか」の演出タイミングだけを追加し、命中(5コマ目)で1回だけダメージを適用する。
+// 注意: 「ゾン」は現在 CHARACTER_POOL(召喚対象)に未登録のため、召喚では入手できない。
+// 名前一致だけで発動するこの処理自体は既存の召喚・重複強化システムを一切変更しない。
+// ==========================================
+const ZON_NAME = '旅する縫い手・ゾン';
+const ZON_ATLAS_ROW = 2; // 3行目 = ゾン (0行目=アステア, 1行目=ルーナ)
+const ZON_SKILL_FRAMES = ['ready', 'charge_1', 'charge_2', 'action', 'impact', 'recover'];
+const ZON_SKILL_GLOW_COLOR = '#ff6b32'; // 橙赤
+const ZON_SKILL_LUNGE_BY_FRAME = [0, 0, 60, 110, 110, 0]; // 敵へ突進する横方向オフセット(px)
+let zonSkillActive = false;        // true の間、連打による二重発動を防止する
+let zonSkillFrameIndex = -1;       // -1: 通常表示(ally_warrior.png) / 0-5: 演出中の再生コマ
+let zonSkillGlowColor = null;      // 発光の現在色(null なら発光なし)
+let zonSkillLungeX = 0;            // 敵へ突進する横方向オフセット(px)
+let zonImpactEffectTimer = 0;      // 命中時、敵の位置に橙赤のX字裁断エフェクトを描く残りフレーム数
+
+function playZonSkillSequence(ally, rawDmg, isPiercing, onComplete) {
+    if (zonSkillActive) return; // 保険: 既に演出中なら何もしない(二重発動防止)
+    zonSkillActive = true;
+    zonSkillFrameIndex = 0; // 構え
+    zonSkillGlowColor = ZON_SKILL_GLOW_COLOR;
+    zonSkillLungeX = 0;
+    playSound('select');
+
+    const CHARGE_MS = 450;   // 低く溜める(0.5秒弱)
+    const FRAME_MS = 140;    // 6コマ再生の1コマあたりの時間
+
+    setTimeout(() => {
+        if (!zonSkillActive) return;
+        zonSkillFrameIndex = 1; // 低く溜める(溜め中の中間ポーズ)
+    }, Math.round(CHARGE_MS / 2));
+
+    setTimeout(() => {
+        let damageApplied = false; // 5コマ目で1回だけダメージを適用するためのガード
+
+        ZON_SKILL_FRAMES.forEach((frameName, i) => {
+            setTimeout(() => {
+                if (!zonSkillActive) return; // 演出が既に終了していたら何もしない
+                zonSkillFrameIndex = i;
+                zonSkillLungeX = ZON_SKILL_LUNGE_BY_FRAME[i];
+
+                if (frameName === 'charge_2') {
+                    playSound('slash'); // 敵へ突進
+                }
+
+                if (frameName === 'impact' && !damageApplied && currentEnemy) {
+                    damageApplied = true; // ダメージは1回だけ
+                    screenShakeTimer = Math.max(screenShakeTimer, 16);
+                    zonImpactEffectTimer = 14; // 敵の位置に橙赤のX字裁断エフェクト
+                    const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
+                    updateHPUI();
+                    if (currentEnemy.sprite) {
+                        // hitStopFrames:5 ≈ 約85ms(60fps換算)、左右への揺れはknockback(toX)で表現
+                        currentEnemy.sprite.triggerHit({ hitStopFrames: 5, flashFrames: 16, knockbackPower: 10, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
+                    }
+                    if (blocked) {
+                        showDamage(600, 360, 0);
+                        bMsg.textContent = `🛡️ ${ally.name}の攻撃は障壁に阻まれた！ スキルか属性連携で破れ！`;
+                    } else {
+                        showDamage(600, 360, dmg);
+                        bMsg.textContent = isPiercing ? `✂️${ally.name}の双鋏奥義！ ${dmg}のダメージ！` : `✂️${ally.name}の双鋏奥義！ ${dmg}のダメージ！`;
+                    }
+                }
+            }, FRAME_MS * i);
+        });
+
+        setTimeout(() => {
+            // 演出終了: ゾンを元の通常表示(ally_warrior.png)・位置へ戻す
+            zonSkillActive = false;
+            zonSkillFrameIndex = -1;
+            zonSkillGlowColor = null;
+            zonSkillLungeX = 0;
+            onComplete();
+        }, FRAME_MS * ZON_SKILL_FRAMES.length + 80);
+    }, CHARGE_MS);
+}
+
+// ==========================================
+// フィールドボス専用表示・攻撃演出 (field_boss_actions.png 5列×2行)
+// 上段=クローゼットロード(0行目) / 下段=スピン・レヴィアタン(1行目)
+// 既存のdragon代用スプライトを「見た目だけ」専用画像へ差し替える。
+// HP・攻撃力・出現条件・撃破判定・反撃確率・ダメージ計算式(dmg)は一切変更しない。
+// ==========================================
+const FIELD_BOSS_ATLAS_PATH = 'assets/sprites/bosses/field_boss_actions.png';
+const FIELD_BOSS_ATLAS_COLS = 5, FIELD_BOSS_ATLAS_ROWS = 2;
+const FIELD_BOSS_ROW = { wardrobe_lord: 0, spin_leviathan: 1 };
+const FIELD_BOSS_WARNING_COLOR = { wardrobe_lord: '#b967ff', spin_leviathan: '#4fd8ff' };
+const fieldBossActionsImg = new Image();
+fieldBossActionsImg.onerror = () => console.warn(`[fieldBoss] 画像の読込に失敗: ${FIELD_BOSS_ATLAS_PATH}`);
+fieldBossActionsImg.src = FIELD_BOSS_ATLAS_PATH;
+
+let fieldBossAttackActive = false;   // true の間、連打・二重発動を防止する
+let fieldBossFrameIndex = -1;        // -1: 待機(先頭コマ) / 0-4: 攻撃演出中の再生コマ
+let fieldBossWarningTimer = 0;       // 攻撃前の予告表示(紫/水色)の残りフレーム数
+let fieldBossWarningColor = null;
+
+// クローゼットロード/スピン・レヴィアタンの反撃を専用演出付きで実行する。
+// dmg・isSpecial は enemyCounterAttack で既存の計算式のまま算出済みの値をそのまま使う(ここでは変更しない)。
+function playFieldBossAttackSequence(dmg, isSpecial, onDone, target) {
+    if (fieldBossAttackActive || !currentEnemy) { if (onDone) onDone(); return; }
+    fieldBossAttackActive = true;
+    const bossKey = currentEnemy.bossKey;
+    fieldBossWarningColor = FIELD_BOSS_WARNING_COLOR[bossKey] || '#b967ff';
+    fieldBossWarningTimer = 30; // 予告表示(約0.5秒)
+
+    const WARNING_MS = 500;
+    const FRAME_MS = 180;
+    const FRAMES = 5;
+
+    setTimeout(() => {
+        fieldBossWarningTimer = 0;
+        for (let i = 0; i < FRAMES; i++) {
+            setTimeout(() => {
+                if (!fieldBossAttackActive) return;
+                fieldBossFrameIndex = i;
+                if (i === 3) {
+                    // 攻撃コマ: 既存のダメージ計算式(dmg)をそのまま1回だけ、抽選済みの対象(勇者 or 仲間)へ適用する
+                    applyCounterDamage(target, dmg, isSpecial);
+                    if (bossKey === 'wardrobe_lord') {
+                        // 長い袖の薙ぎ払い: 画面を少し横揺れさせる(既存のscreenShakeTimerを再利用)
+                        screenShakeTimer = Math.max(screenShakeTimer, 18);
+                    } else if (bossKey === 'spin_leviathan') {
+                        // 渦潮攻撃: 気泡+渦巻きエフェクト(既存のパーティクル系を再利用)
+                        screenShakeTimer = Math.max(screenShakeTimer, 12);
+                        spawnMagicParticles(600, 380, 600, 380, '#4fd8ff');
+                        spawnMagicParticles(600, 380, 600, 380, '#9be8ff');
+                    }
+                }
+            }, FRAME_MS * i);
+        }
+        setTimeout(() => {
+            fieldBossAttackActive = false;
+            fieldBossFrameIndex = -1;
+            if (onDone) onDone();
+        }, FRAME_MS * FRAMES + 80);
+    }, WARNING_MS);
+}
+
+// ==========================================
 // パーティ重複判定・強化
 // 召喚仲間は「役職(=スプライト)」単位、元・敵の仲間は「enemyTypeKey」単位で同一とみなす。
 // 見た目が同じキャラクターをパーティに複数追加することはなく、必ずLv/攻撃補正/スキルLvが伸びる。
@@ -522,6 +1530,64 @@ function findExistingPartyMember(candidate) {
     return GameState.party.find(p => p.job !== '魔物' && p.job === candidate.job);
 }
 
+// 仲間の最大HP: 役職ごとに基準値を変え、Lv(重複強化・仕立工房と共通)に応じて伸びる
+const ALLY_BASE_MAX_HP = { '染色術師': 70, '採寸弓師': 90, '裁断戦士': 120 };
+function getAllyMaxHp(ally) {
+    if (ally.job === '魔物') return getMonsterAllyBaseHp(ally) + ((ally.level || 1) - 1) * 8;
+    const base = ALLY_BASE_MAX_HP[ally.job] || 80;
+    const levelBonus = ((ally.level || 1) - 1) * 8;
+    return base + levelBonus;
+}
+
+// ==========================================
+// 「元・敵の仲間(job:'魔物')」用のHP・攻撃力の算出式。
+// 仲間化する手段(敵を仲間にする機能)自体は未実装だが、addOrEnhancePartyMember /
+// getAllyDamageMultiplier など既存の仲間強化の仕組みにそのまま乗るよう、
+// 数値の算出方法だけを先に用意しておく。
+//
+// - 倒した敵の階級(ally.sourceTier: 'small'|'mid'|'boss')が高いほど基礎値が高くなる
+// - 出身フィールド(ally.sourceFieldId)のenemyHpMultiplier/enemyAttackMultiplier
+//   (field-expansion.jsの既存ステージ倍率)を反映するため、後半ステージの敵ほど
+//   仲間になったときも強い
+// - Lv成長(重複強化・仕立工房と共通のally.level)でさらに伸びる。
+//   将来、敵を仲間にする処理を実装する際は candidate.sourceTier / candidate.sourceFieldId を
+//   セットして addOrEnhancePartyMember に渡すだけでこの計算式がそのまま使われる。
+// どちらの項目も未設定の場合は 'small' 階級・倍率なしとして扱う。
+// ==========================================
+const MONSTER_ALLY_BASE_HP_BY_TIER = { small: 60, mid: 110, boss: 200 };
+const MONSTER_ALLY_BASE_ATK_BY_TIER = { small: 25, mid: 45, boss: 70 };
+
+function getMonsterAllyBaseHp(ally) {
+    const tierBase = MONSTER_ALLY_BASE_HP_BY_TIER[ally.sourceTier] || MONSTER_ALLY_BASE_HP_BY_TIER.small;
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const fieldCfg = fx && ally.sourceFieldId && fx.fields[ally.sourceFieldId];
+    const stageMult = fieldCfg ? (fieldCfg.enemyHpMultiplier || 1) : 1;
+    return Math.round(tierBase * stageMult);
+}
+function getMonsterAllyBaseAtk(ally) {
+    const tierBase = MONSTER_ALLY_BASE_ATK_BY_TIER[ally.sourceTier] || MONSTER_ALLY_BASE_ATK_BY_TIER.small;
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const fieldCfg = fx && ally.sourceFieldId && fx.fields[ally.sourceFieldId];
+    const stageMult = fieldCfg ? (fieldCfg.enemyAttackMultiplier || 1) : 1;
+    return Math.round(tierBase * stageMult);
+}
+
+// 仲間の基礎攻撃力(役職ごと、既存3職の数値は変更しない)。
+// context: 'select'(指名攻撃) / 'coop'(総追撃) / 'perfectfit'(属性連携)で使う基礎値を返す。
+// 魔物だけは固定値ではなく、階級+出身ステージから動的に算出する。
+function getAllyAttackBase(ally, context) {
+    if (ally.job === '魔物') {
+        const monsterBase = getMonsterAllyBaseAtk(ally);
+        // 既存3職の比率(coop:select:perfectfit ≒ 0.8 : 1 : 1.2)に合わせて配分する
+        if (context === 'coop') return Math.round(monsterBase * 0.8);
+        if (context === 'perfectfit') return Math.round(monsterBase * 1.2);
+        return monsterBase; // 'select'
+    }
+    if (context === 'coop') return ally.job === '染色術師' ? 80 : (ally.job === '採寸弓師' ? 50 : 20);
+    if (context === 'perfectfit') return ally.job === '染色術師' ? 120 : (ally.job === '採寸弓師' ? 80 : 40);
+    return ally.job === '染色術師' ? 100 : (ally.job === '採寸弓師' ? 65 : 30); // 'select'
+}
+
 function addOrEnhancePartyMember(candidate) {
     const existing = findExistingPartyMember(candidate);
     if (existing) {
@@ -529,12 +1595,16 @@ function addOrEnhancePartyMember(candidate) {
         existing.duplicateCount = (existing.duplicateCount || 0) + 1;
         existing.atkBonusPct = (existing.atkBonusPct || 0) + 10;
         if (existing.duplicateCount % 2 === 0) existing.skillLevel = (existing.skillLevel || 1) + 1;
+        existing.maxHp = getAllyMaxHp(existing);
+        existing.hp = existing.maxHp; // レベルアップ時は全回復する(戦闘不能からも復帰する)
         return { merged: true, member: existing };
     }
     candidate.level = 1;
     candidate.duplicateCount = 0;
     candidate.atkBonusPct = 0;
     candidate.skillLevel = 1;
+    candidate.maxHp = getAllyMaxHp(candidate);
+    candidate.hp = candidate.maxHp;
     GameState.party.push(candidate);
     return { merged: false, member: candidate };
 }
@@ -646,6 +1716,7 @@ const canvas = document.getElementById('game-canvas'); const ctx = canvas.getCon
 canvas.width = 800; canvas.height = 600;
 ctx.imageSmoothingEnabled = false; // ドットをぼかさない
 const player = { x: 400, y: 300, vx: 0, vy: 0, speed: 5 }; const keys = {}; const historyLog = [];
+let footstepTimer = 0; let footstepToggle = false; // 移動中の足音(交互に鳴らして左右の足を表現)
 const GRASS_ZONES = [{ x: 220, y: 170, w: 100, h: 60 }, { x: 500, y: 200, w: 80, h: 100 }, { x: 350, y: 300, w: 80, h: 120 }, { x: 450, y: 470, w: 120, h: 50 }];
 const SHOP_DOOR = { x: 550, y: 140, w: 20, h: 20 };
 const SHOP_TRIGGER_ZONE = { x: SHOP_DOOR.x + 10 - 30, y: SHOP_DOOR.y + 10 - 40, w: 60, h: 80 };
@@ -653,14 +1724,130 @@ const SHOP_TRIGGER_ZONE = { x: SHOP_DOOR.x + 10 - 30, y: SHOP_DOOR.y + 10 - 40, 
 const BOSS_GATE_ZONE = { x: 370, y: 25, w: 60, h: 50 };
 let bossGateMsgCooldown = 0;
 
+// フィールド拡張の3ステージ用: 背景画像(800x600)に配置されている大きな物の当たり判定(円形)。
+// 座標・半径はおおよその中心位置。プレイヤーはこれらの物をすり抜けられず、壁沿いにスライドして進む。
+const FIELD_OBSTACLES = {
+    azurlight: [ // 草原: 四隅の糸巻き・池・石ボタン
+        { x: 45, y: 55, r: 40 }, { x: 755, y: 45, r: 40 }, { x: 48, y: 485, r: 40 }, { x: 745, y: 495, r: 40 },
+        { x: 525, y: 95, r: 52 }, { x: 105, y: 405, r: 62 }, { x: 615, y: 465, r: 52 },
+        { x: 160, y: 145, r: 26 }, { x: 95, y: 320, r: 24 }, { x: 330, y: 555, r: 24 }, { x: 755, y: 270, r: 22 }
+    ],
+    wardrobe_gloomwood: [ // 闇の森: 中央のクローゼット扉・糸巻き・木箱
+        { x: 400, y: 55, r: 55 },
+        { x: 150, y: 310, r: 24 }, { x: 605, y: 220, r: 22 }, { x: 615, y: 335, r: 22 },
+        { x: 150, y: 270, r: 20 }, { x: 190, y: 510, r: 24 }, { x: 660, y: 510, r: 24 }
+    ],
+    laundry_abyss: [ // 水中: ドラム内側の左右の羽根・上下のハブ
+        { x: 75, y: 220, r: 42 }, { x: 62, y: 320, r: 42 },
+        { x: 725, y: 220, r: 42 }, { x: 738, y: 320, r: 42 },
+        { x: 400, y: 70, r: 50 }, { x: 400, y: 555, r: 42 }
+    ]
+};
+const PLAYER_COLLISION_RADIUS = 10;
+
+// 指定座標が現在フィールドの障害物に重なるかどうか(広場滞在中・未定義フィールドは常に通れる)
+function isBlockedByObstacle(x, y) {
+    if (isInLaundryPlaza) return false;
+    const obstacles = FIELD_OBSTACLES[GameState.currentFieldId];
+    if (!obstacles) return false;
+    for (const o of obstacles) {
+        const dx = x - o.x, dy = y - o.y;
+        const rr = o.r + PLAYER_COLLISION_RADIUS;
+        if (dx * dx + dy * dy < rr * rr) return true;
+    }
+    return false;
+}
+
 function rectsOverlap(a, b) {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
 // パーティ追従者(仲間 or 元・敵)をスプライトで描画する共通ヘルパー
 function drawFollowerSprite(follower, x, y, scale) {
+    // 戦闘不能(HP0)の仲間は半透明で描く(既存の描画分岐は内側でそのまま使う)
+    const isKnockedOut = typeof follower.hp === 'number' && follower.hp <= 0;
+    ctx.save();
+    if (isKnockedOut) ctx.globalAlpha = 0.35;
+    try {
+    // アステアだけ専用ポートレート(先頭コマ)を使う。フィールド追従・戦闘画面の両方がここを通る。
+    if (follower.name === ASTERIA_NAME && asteriaPortraitImg.complete && asteriaPortraitImg.naturalWidth > 0) {
+        const cellW = asteriaPortraitImg.naturalWidth / ASTERIA_ATLAS_COLS;
+        const cellH = asteriaPortraitImg.naturalHeight / ASTERIA_ATLAS_ROWS;
+        const baseCell = follower.sprite ? follower.sprite.cell : 48;
+        const dh = baseCell * scale; // 他の仲間と高さを揃え、アスペクト比は保って歪ませない
+        const dw = dh * (cellW / cellH);
+        // スキル演出中(asteriaSkillActive)だけ該当コマ・浮遊・発光を適用する。通常時は先頭コマ・元位置のまま。
+        const isSkilling = asteriaSkillActive && asteriaSkillFrameIndex >= 0;
+        const srcCol = isSkilling ? asteriaSkillFrameIndex : 0;
+        const drawY = y - (isSkilling ? asteriaSkillFloatY : 0);
+        ctx.save();
+        if (isSkilling && asteriaSkillGlowColor) {
+            const glowR = dw * 0.85;
+            const grad = ctx.createRadialGradient(x, drawY - dh / 2, 4, x, drawY - dh / 2, glowR);
+            grad.addColorStop(0, asteriaSkillGlowColor);
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.globalAlpha = 0.55;
+            ctx.fillStyle = grad;
+            ctx.beginPath(); ctx.arc(x, drawY - dh / 2, glowR, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(asteriaPortraitImg, srcCol * cellW, 0, cellW, cellH, x - dw / 2, drawY - dh, dw, dh);
+        ctx.restore();
+        return;
+    }
+    // ルーナはスキル演出中だけ専用アトラス(2行目)のコマを表示する。通常表示(ally_archer.png)は変更しない。
+    if (follower.name === LUNA_NAME && lunaSkillActive && lunaSkillFrameIndex >= 0 && asteriaPortraitImg.complete && asteriaPortraitImg.naturalWidth > 0) {
+        const cellW = asteriaPortraitImg.naturalWidth / ASTERIA_ATLAS_COLS;
+        const cellH = asteriaPortraitImg.naturalHeight / ASTERIA_ATLAS_ROWS;
+        const baseCell = follower.sprite ? follower.sprite.cell : 48;
+        const dh = baseCell * scale;
+        const dw = dh * (cellW / cellH);
+        ctx.save();
+        if (lunaSkillGlowColor) {
+            const glowR = dw * 0.8;
+            const grad = ctx.createRadialGradient(x, y - dh / 2, 4, x, y - dh / 2, glowR);
+            grad.addColorStop(0, lunaSkillGlowColor);
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.globalAlpha = 0.5;
+            ctx.fillStyle = grad;
+            ctx.beginPath(); ctx.arc(x, y - dh / 2, glowR, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(asteriaPortraitImg, lunaSkillFrameIndex * cellW, LUNA_ATLAS_ROW * cellH, cellW, cellH, x - dw / 2, y - dh, dw, dh);
+        ctx.restore();
+        return;
+    }
+    // ゾンはスキル演出中だけ専用アトラス(3行目)のコマを表示する。通常表示(ally_warrior.png)は変更しない。
+    if (follower.name === ZON_NAME && zonSkillActive && zonSkillFrameIndex >= 0 && asteriaPortraitImg.complete && asteriaPortraitImg.naturalWidth > 0) {
+        const cellW = asteriaPortraitImg.naturalWidth / ASTERIA_ATLAS_COLS;
+        const cellH = asteriaPortraitImg.naturalHeight / ASTERIA_ATLAS_ROWS;
+        const baseCell = follower.sprite ? follower.sprite.cell : 48;
+        const dh = baseCell * scale;
+        const dw = dh * (cellW / cellH);
+        const drawX = x + zonSkillLungeX; // 敵へ突進する横方向オフセット
+        ctx.save();
+        if (zonSkillGlowColor) {
+            const glowR = dw * 0.8;
+            const grad = ctx.createRadialGradient(drawX, y - dh / 2, 4, drawX, y - dh / 2, glowR);
+            grad.addColorStop(0, zonSkillGlowColor);
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.globalAlpha = 0.5;
+            ctx.fillStyle = grad;
+            ctx.beginPath(); ctx.arc(drawX, y - dh / 2, glowR, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(asteriaPortraitImg, zonSkillFrameIndex * cellW, ZON_ATLAS_ROW * cellH, cellW, cellH, drawX - dw / 2, y - dh, dw, dh);
+        ctx.restore();
+        return;
+    }
     if (!follower.sprite) return;
     drawSprite(ctx, follower.sprite, x, y, { scale });
+    } finally {
+        ctx.restore();
+    }
 }
 
 const particles = []; const dmgTexts = []; let screenShakeTimer = 0; let battleViewState = 'idle'; let slashEffectTimer = 0;
@@ -671,14 +1858,279 @@ function spawnParticles(targetX, targetY) {
 function spawnMagicParticles(sourceX, sourceY, targetX, targetY, color) {
     for (let i = 0; i < 30; i++) particles.push({ x: sourceX, y: sourceY, tx: targetX, ty: targetY, vx: (Math.random() - 0.5) * 8, vy: (Math.random() - 0.5) * 8 - 5, life: 30, color: color });
 }
-function showDamage(x, y, amount) { dmgTexts.push({ x: x + Math.random() * 40 - 20, y: y - 20 + Math.random() * 20 - 10, text: `${amount}!`, life: 45, vy: -3 }); }
+function showDamage(x, y, amount) { dmgTexts.push({ x: x + Math.random() * 40 - 20, y: y - 20 + Math.random() * 20 - 10, text: `${amount}!`, life: 45, vy: -3, color: 'red' }); }
+// 回復量の表示(ダメージ表示と同じ仕組みを使い、色だけ緑にして区別する)
+function showHeal(x, y, amount) { dmgTexts.push({ x: x + Math.random() * 40 - 20, y: y - 20 + Math.random() * 20 - 10, text: `+${amount}`, life: 45, vy: -3, color: '#4fd06a' }); }
 
 // ==========================================
 // GAME LOOP & TRIGGERS
 // ==========================================
 let isBattling = false; let currentEnemy = null; let isMenuOpen = false; let isShopOpen = false; let isFashionShow = false;
+// 戦闘中の主戦力交代: nullなら勇者、仲間を選んで交代するとその仲間が「たたかう」を行う主戦力になる。
+let activeFighter = null;
+
+// ==========================================
+// 安全エリア「泡織りの洗濯広場」(差分追加)
+// 既存の草原・闇の森・水中フィールド、field-expansion.js、戦闘・召喚・BGM・セーブ方式は変更しない。
+// GameState.currentFieldIdは滞在中も元のフィールドのまま維持し、isInLaundryPlazaで
+// 描画・移動判定・BGMだけを切り替える。広場内では敵の出現・召喚・伝説の継承通知は発生しない。
+// ==========================================
+let isInLaundryPlaza = false;
+let laundryReturnField = null;
+let laundryReturnX = 190, laundryReturnY = 190;
+let laundryTubCooldown = 0;
+let laundryHealEffectTimer = 0; // 回復演出(泡が広がる・布が光る)の残りフレーム数
+
+const LAUNDRY_ENTRANCE_ZONE = { x: 40, y: 480, w: 70, h: 70 }; // 3フィールド共通の入口位置
+const LAUNDRY_EXIT_ZONE = { x: 40, y: 480, w: 70, h: 70 };     // 広場からフィールドへ戻る出口
+const LAUNDRY_TUB_ZONE = { x: 365, y: 265, w: 70, h: 70 };     // 中央の洗濯槽(回復)
+const LAUNDRY_SPOT_ZONES = [
+    { x: 120, y: 160, w: 55, h: 55 },
+    { x: 625, y: 170, w: 55, h: 55 },
+    { x: 380, y: 460, w: 55, h: 55 }
+];
+const LAUNDRY_DETERGENT_MAX = 5;
+const LAUNDRY_SPOT_RESPAWN_WINS = 5;
+
+// 広場へ入る: 元のフィールドと座標を記憶し、フィールドBGMをフェードアウトしてから広場BGMへ切り替える
+function enterLaundryPlaza() {
+    if (isBattling || isMenuOpen || isShopOpen || isFashionShow || isInLaundryPlaza) return;
+    laundryReturnField = GameState.currentFieldId;
+    laundryReturnX = player.x; laundryReturnY = player.y;
+    isInLaundryPlaza = true;
+    player.x = 160; player.y = 430; historyLog.length = 0; // 出口ゾーンから十分離れた位置に出現させる(入場直後の誤反応防止)
+    playSound('select');
+    BGMManager.playBGM('field:laundry_plaza', playLaundryPlazaBGM); // 広場BGMへ1回だけ切り替える(重複再生はしない)
+    showTransientFieldMessage('💭 泡織りの洗濯広場に着いた…');
+    FieldAmbientAnimation.start('laundry_plaza');
+}
+
+// 広場から出る: 記憶していたフィールド・座標へ戻し、そのフィールドのBGMへ戻す(二重再生はしない)
+function exitLaundryPlaza() {
+    if (!isInLaundryPlaza) return;
+    isInLaundryPlaza = false;
+    GameState.currentFieldId = laundryReturnField || GameState.currentFieldId;
+    player.x = laundryReturnX; player.y = laundryReturnY; historyLog.length = 0;
+    playSound('select');
+    endBattleBGM(); // フェードアウト後、現在のフィールドBGMへ戻す共通処理を再利用(戦闘専用ではない)
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const fname = (fx && fx.fields[GameState.currentFieldId] && fx.fields[GameState.currentFieldId].name) || 'フィールド';
+    showTransientFieldMessage(`🗺️ ${fname}へ戻った`);
+    FieldAmbientAnimation.start(GameState.currentFieldId);
+}
+
+// 洗濯槽:「仕立て直して休む」。洗剤1個 → 最初の1回は無料 → 40G の優先順で全回復する。
+function tubRestAction() {
+    const laundry = GameState.worldProgress.laundry;
+    let costLabel;
+    if (!laundry.freeRestUsed) {
+        laundry.freeRestUsed = true;
+        costLabel = '無料(はじめての利用)';
+    } else if (laundry.detergent > 0) {
+        laundry.detergent--;
+        costLabel = '洗剤1個';
+    } else if (GameState.gold >= 40) {
+        updateGold(-40);
+        costLabel = '40G';
+    } else {
+        showTransientFieldMessage('洗剤もGも足りず、仕立て直せない…');
+        return;
+    }
+    GameState.avatar.hp = GameState.avatar.maxHp || 100;
+    GameState.avatar.mp = GameState.avatar.maxMp || 50;
+    updateHeroHUD();
+    // 戦闘不能の仲間も含め、パーティ全員のHPを全回復する
+    GameState.party.forEach(p => { if (typeof p.hp === 'number') p.hp = p.maxHp || getAllyMaxHp(p); });
+    laundryHealEffectTimer = 45;
+    spawnMagicParticles(400, 300, 400, 220, '#ffffff');
+    spawnMagicParticles(400, 300, 400, 220, '#bfeeff');
+    spawnMagicParticles(400, 300, 400, 220, '#ffd6ea');
+    playSound('crystal');
+    playHealFanfare();
+    saveWorldProgress();
+    showTransientFieldMessage(`✨ 仕立て直して休んだ！ 仲間も含め全員HP・MPが全回復(${costLabel})`);
+}
+
+// 洗剤の泡: 採取して洗剤+1(上限5)。1回採取すると、通算5勝するまで復活しない。
+function gatherLaundrySpot(index) {
+    const laundry = GameState.worldProgress.laundry;
+    const winsAtGather = laundry.spotWinsAtGather[index];
+    if (winsAtGather !== null) {
+        const remain = LAUNDRY_SPOT_RESPAWN_WINS - (laundry.totalWins - winsAtGather);
+        if (remain > 0) {
+            showTransientFieldMessage(`泡が再び満ちるには、あと${remain}回の勝利が必要`);
+            return;
+        }
+    }
+    if (laundry.detergent >= LAUNDRY_DETERGENT_MAX) {
+        showTransientFieldMessage(`洗剤は上限(${LAUNDRY_DETERGENT_MAX}個)まで持っている`);
+        return;
+    }
+    laundry.detergent++;
+    laundry.spotWinsAtGather[index] = laundry.totalWins;
+    saveWorldProgress();
+    playSound('select');
+    const z = LAUNDRY_SPOT_ZONES[index];
+    spawnMagicParticles(z.x + z.w / 2, z.y + z.h / 2, player.x, player.y, '#e8f9ff');
+    showTransientFieldMessage(`🧼 洗剤を1個手に入れた！ (所持: ${laundry.detergent}個)`);
+}
+
+// 広場内の当たり判定。敵の出現・召喚・ボスゲート等はここでは一切呼ばない。
+function checkLaundryPlazaTriggers() {
+    if (laundryTubCooldown > 0) laundryTubCooldown--;
+    const feet = GameState.avatar.sprite
+        ? GameState.avatar.sprite.getFeetHitbox(player.x, player.y)
+        : { x: player.x - 5, y: player.y - 3, w: 10, h: 6 };
+    if (!(keys['ArrowUp'] || keys['w'])) return;
+    if (rectsOverlap(feet, LAUNDRY_EXIT_ZONE)) { exitLaundryPlaza(); return; }
+    if (rectsOverlap(feet, LAUNDRY_TUB_ZONE)) {
+        if (laundryTubCooldown <= 0) { tubRestAction(); laundryTubCooldown = 60; }
+        return;
+    }
+    for (let i = 0; i < LAUNDRY_SPOT_ZONES.length; i++) {
+        if (rectsOverlap(feet, LAUNDRY_SPOT_ZONES[i])) { gatherLaundrySpot(i); return; }
+    }
+}
+
+// 広場の背景描画: 巨大な洗濯槽の噴水、物干し竿、揺れる布、糸巻きの椅子、洗剤ボトル型の灯り、気泡
+function drawLaundryPlaza(ctxObj) {
+    const t = GameState.globalTime;
+    const tubX = 400, tubY = 300;
+    // 新しい探索背景(静止画。環境アニメーションはまだ追加しない)を優先して使う。
+    if (LAUNDRY_PLAZA_BG_IMG && LAUNDRY_PLAZA_BG_IMG.complete && LAUNDRY_PLAZA_BG_IMG.naturalWidth > 0) {
+        ctxObj.imageSmoothingEnabled = false;
+        ctxObj.drawImage(LAUNDRY_PLAZA_BG_IMG, 0, 0, 800, 600);
+    } else {
+        // 新画像が未読込の場合は既存の手描き背景へフォールバックする(挙動は変更しない)
+        const grad = ctxObj.createLinearGradient(0, 0, 0, 600);
+        grad.addColorStop(0, '#2a3f52'); grad.addColorStop(1, '#16232f');
+        ctxObj.fillStyle = grad; ctxObj.fillRect(0, 0, 800, 600);
+
+        // 床タイル(荒めの16bitドット風の市松模様)
+        ctxObj.fillStyle = '#324a5e';
+        for (let y = 0; y < 600; y += 32) {
+            for (let x = 0; x < 800; x += 32) {
+                if ((x / 32 + y / 32) % 2 === 0) ctxObj.fillRect(x, y, 32, 32);
+            }
+        }
+
+        // 物干し竿+揺れる布(左右)
+        [[80, 300], [700, 300]].forEach(([px, py], gi) => {
+            ctxObj.strokeStyle = '#8a8a8a'; ctxObj.lineWidth = 4;
+            ctxObj.beginPath(); ctxObj.moveTo(px, py - 90); ctxObj.lineTo(px, py); ctxObj.stroke();
+            ctxObj.beginPath(); ctxObj.moveTo(px - 40, py - 80); ctxObj.lineTo(px + 40, py - 80); ctxObj.stroke();
+            const clothColors = ['#ff9ecb', '#9ee3ff', '#fff3a0'];
+            for (let c = 0; c < 3; c++) {
+                const sway = Math.sin(t * 0.03 + c + gi) * 6;
+                ctxObj.fillStyle = laundryHealEffectTimer > 0 ? '#ffffff' : clothColors[c];
+                ctxObj.fillRect(px - 34 + c * 24 + sway, py - 78, 18, 34);
+            }
+        });
+
+        // 糸巻きの椅子(2脚)
+        [[180, 480], [610, 480]].forEach(([sx, sy]) => {
+            ctxObj.fillStyle = '#c98b4a'; ctxObj.fillRect(sx - 16, sy - 10, 32, 10);
+            ctxObj.fillStyle = '#a5672c'; ctxObj.fillRect(sx - 12, sy, 6, 16); ctxObj.fillRect(sx + 6, sy, 6, 16);
+            ctxObj.strokeStyle = '#e8c290'; ctxObj.lineWidth = 2;
+            ctxObj.beginPath(); ctxObj.arc(sx, sy - 15, 8, 0, Math.PI * 2); ctxObj.stroke();
+        });
+
+        // 洗剤ボトル型の灯り(4隅)
+        [[40, 470], [760, 470], [40, 130], [760, 130]].forEach(([bx, by]) => {
+            const glow = 0.5 + Math.sin(t * 0.05) * 0.15;
+            ctxObj.save(); ctxObj.globalAlpha = glow;
+            ctxObj.fillStyle = '#bff2ff'; ctxObj.fillRect(bx - 8, by - 20, 16, 26); ctxObj.fillRect(bx - 5, by - 28, 10, 8);
+            ctxObj.restore();
+            ctxObj.fillStyle = '#3a5b6e'; ctxObj.fillRect(bx - 9, by - 22, 18, 4);
+        });
+
+        // 中央の洗濯槽(噴水)
+        ctxObj.fillStyle = '#4a4a4a';
+        ctxObj.beginPath(); ctxObj.ellipse(tubX, tubY + 45, 78, 26, 0, 0, Math.PI * 2); ctxObj.fill();
+        ctxObj.fillStyle = '#7fd6ff';
+        ctxObj.beginPath(); ctxObj.ellipse(tubX, tubY + 20, 62, 20, 0, 0, Math.PI * 2); ctxObj.fill();
+        ctxObj.fillStyle = '#cfeeff';
+        ctxObj.beginPath(); ctxObj.ellipse(tubX, tubY + 14, 62, 16, 0, 0, Math.PI * 2); ctxObj.fill();
+
+        // 水面から浮かぶ気泡(白・水色・桃色)
+        const bubbleColors = ['#ffffff', '#a9e6ff', '#ffc9e6'];
+        for (let i = 0; i < 14; i++) {
+            const bx = tubX + Math.sin(i * 1.7) * 55;
+            const cyclePos = (t * 1.1 + i * 37) % 130;
+            ctxObj.fillStyle = bubbleColors[i % 3];
+            ctxObj.globalAlpha = Math.max(0, 1 - cyclePos / 130);
+            ctxObj.beginPath(); ctxObj.arc(bx, tubY + 10 - cyclePos, 3 + (i % 3), 0, Math.PI * 2); ctxObj.fill();
+            ctxObj.globalAlpha = 1;
+        }
+    }
+
+    // 回復演出: 白い泡が広がる輪
+    if (laundryHealEffectTimer > 0) {
+        const p = 1 - laundryHealEffectTimer / 45;
+        ctxObj.save();
+        ctxObj.globalAlpha = 0.5 * (1 - p);
+        ctxObj.strokeStyle = '#ffffff'; ctxObj.lineWidth = 4;
+        ctxObj.beginPath(); ctxObj.arc(tubX, tubY + 15, 30 + p * 150, 0, Math.PI * 2); ctxObj.stroke();
+        ctxObj.restore();
+    }
+
+    // 洗剤の泡(採取ポイント): 復活済みだけ光らせる
+    const laundry = GameState.worldProgress.laundry;
+    LAUNDRY_SPOT_ZONES.forEach((z, i) => {
+        const winsAtGather = laundry.spotWinsAtGather[i];
+        const available = winsAtGather === null || (laundry.totalWins - winsAtGather) >= LAUNDRY_SPOT_RESPAWN_WINS;
+        const cx = z.x + z.w / 2, cy = z.y + z.h / 2;
+        ctxObj.save();
+        if (available) {
+            const pulse = 12 + Math.sin(t * 0.08 + i) * 3;
+            ctxObj.globalAlpha = 0.7; ctxObj.fillStyle = '#eafcff';
+            ctxObj.beginPath(); ctxObj.arc(cx, cy, pulse, 0, Math.PI * 2); ctxObj.fill();
+            ctxObj.globalAlpha = 1; ctxObj.strokeStyle = '#ffffff'; ctxObj.lineWidth = 2;
+            ctxObj.beginPath(); ctxObj.arc(cx, cy, pulse + 4, 0, Math.PI * 2); ctxObj.stroke();
+        } else {
+            ctxObj.globalAlpha = 0.25; ctxObj.fillStyle = '#88a0ac';
+            ctxObj.beginPath(); ctxObj.arc(cx, cy, 8, 0, Math.PI * 2); ctxObj.fill();
+        }
+        ctxObj.restore();
+    });
+
+    // 出口の目印
+    ctxObj.save();
+    ctxObj.globalAlpha = 0.6; ctxObj.strokeStyle = '#ffe066'; ctxObj.lineWidth = 3;
+    ctxObj.strokeRect(LAUNDRY_EXIT_ZONE.x, LAUNDRY_EXIT_ZONE.y, LAUNDRY_EXIT_ZONE.w, LAUNDRY_EXIT_ZONE.h);
+    ctxObj.restore();
+}
+
+// 回復の間(洗濯広場)専用BGM: ハープ・フルート・柔らかい弦の小編成、安心感のある穏やかなオリジナル曲
+// 72 BPM。打楽器は使わず、水音や気泡は柔らかいベル・高音で表現する。
+function playLaundryPlazaBGM() {
+    const bpm = 72;
+    const stepMs = 60000 / bpm / 2; // 8分音符
+    const stepDur = stepMs / 1000;
+    const harpArp = [261.63, 329.63, 392.00, 329.63, 261.63, 329.63, 392.00, 493.88]; // C4-E4-G4-B4系の穏やかなアルペジオ
+    const fluteMotif = [0, 0, 0, 523.25, 0, 0, 493.88, 0];
+    startSequencer(stepMs, (step) => {
+        synthHarp(harpArp[step], stepDur * 1.6, 0.07, 0); // ハープの小さなアルペジオ
+        if (step === 0) synthStrings(196.00, stepDur * 8, 0.035, 0); // 柔らかい弦の持続音(G3)
+        const fl = fluteMotif[step];
+        if (fl) synthFlute(fl, stepDur * 1.8, 0.05, 0);
+        if (step % 4 === 2) synthBell(1318.51, 1.2, 0.03, 0); // 気泡のような小さなベル
+    }, 8);
+}
+
+// 回復時だけ鳴らす短いファンファーレ(ベル+上昇する弦、ループとは別の単発)
+function playHealFanfare() {
+    synthBell(1046.50, 0.9, 0.08, 0);
+    synthStrings(392.00, 0.5, 0.07, 0);
+    synthStrings(523.25, 0.5, 0.07, 0.12);
+    synthStrings(659.25, 0.6, 0.08, 0.24);
+    synthBell(1318.51, 1.0, 0.07, 0.30);
+}
 
 function checkTriggers() {
+    // 広場滞在中は専用の当たり判定だけを使う(敵の出現・召喚・ボスゲートはここでは発生しない)
+    if (isInLaundryPlaza) { checkLaundryPlazaTriggers(); return; }
+
     // 当たり判定は足元だけの小さな帯（スプライト矩形全体では判定しない）
     const feet = GameState.avatar.sprite
         ? GameState.avatar.sprite.getFeetHitbox(player.x, player.y)
@@ -706,6 +2158,11 @@ function checkTriggers() {
     if (bossGateMsgCooldown > 0) bossGateMsgCooldown--;
     if (field && rectsOverlap(feet, BOSS_GATE_ZONE) && (keys['ArrowUp'] || keys['w'])) {
         checkBossGateTrigger(field);
+    }
+
+    // 泡織りの洗濯広場への入口(3フィールド共通の位置。草原は最初から、他は解放後のみそこに到達できる)
+    if (field && rectsOverlap(feet, LAUNDRY_ENTRANCE_ZONE) && (keys['ArrowUp'] || keys['w'])) {
+        enterLaundryPlaza();
     }
 }
 
@@ -753,7 +2210,7 @@ setInterval(() => {
 
 function updateGame() {
     GameState.globalTime++;
-    if (isMenuOpen || isShopOpen || isFashionShow) return;
+    if (isMenuOpen || isShopOpen || isFashionShow || isGameOver) return;
 
     let currentSpeed = player.speed;
     let hasTrendBuff = false;
@@ -777,14 +2234,25 @@ function updateGame() {
     });
 
     if (isMoving) {
-        player.x = Math.max(20, Math.min(canvas.width - 20, player.x + player.vx)); player.y = Math.max(30, Math.min(canvas.height - 20, player.y + player.vy));
+        const nextX = Math.max(20, Math.min(canvas.width - 20, player.x + player.vx));
+        const nextY = Math.max(30, Math.min(canvas.height - 20, player.y + player.vy));
+        // ステージに配置された物(糸巻き・池・扉など)は軸ごとに当たり判定し、壁沿いにスライドできるようにする
+        if (!isBlockedByObstacle(nextX, player.y)) player.x = nextX;
+        if (!isBlockedByObstacle(player.x, nextY)) player.y = nextY;
         historyLog.unshift({ x: player.x, y: player.y }); if (historyLog.length > 500) historyLog.pop();
         checkTriggers();
+        // 移動中だけ足音を鳴らす。走行時は速いテンポ、通常歩行時はゆっくりめのテンポ。
+        footstepTimer--;
+        if (footstepTimer <= 0) { playSound('footstep'); footstepTimer = hasTrendBuff ? 10 : 18; }
+    } else {
+        footstepTimer = 0; // 止まったら次に動き出した瞬間から足音を鳴らす
     }
 }
 
 function updateBattleEffects() {
     if (screenShakeTimer > 0) screenShakeTimer--; if (slashEffectTimer > 0) slashEffectTimer--;
+    if (lunaImpactEffectTimer > 0) lunaImpactEffectTimer--;
+    if (zonImpactEffectTimer > 0) zonImpactEffectTimer--;
     if (skillChargeTimer > 0) skillChargeTimer--;
     updateLunge();
     for (let i = dmgTexts.length - 1; i >= 0; i--) { let dt = dmgTexts[i]; dt.y += dt.vy; dt.vy += 0.2; dt.life--; if (dt.life <= 0) dmgTexts.splice(i, 1); }
@@ -804,8 +2272,17 @@ function updateLunge() {
 // フィールド拡張: 現在地の背景を描く。画像が未読込の間は既存のdrawMap(草原)へフォールバックする。
 // field-expansion.jsのdrawAnimatedFieldをそのまま使い、8px刻みのアニメーションを含めて委譲する。
 function drawFieldBackground(ctxObj) {
-    const fx = window.ZSAGA_FIELD_EXPANSION;
+    if (isInLaundryPlaza) { drawLaundryPlaza(ctxObj); return; } // 広場滞在中は専用背景を描く
     const fieldId = GameState.currentFieldId;
+    // 新しい探索背景(静止画。環境アニメーションはまだ追加しない)を優先して使う。
+    const newImg = NEW_FIELD_BG_IMAGES[fieldId];
+    if (newImg && newImg.complete && newImg.naturalWidth > 0) {
+        ctxObj.imageSmoothingEnabled = false;
+        ctxObj.drawImage(newImg, 0, 0, 800, 600);
+        return;
+    }
+    // 新画像が未読込/未対応フィールドの場合は既存の描画へフォールバックする(挙動は変更しない)
+    const fx = window.ZSAGA_FIELD_EXPANSION;
     const img = FIELD_BG_IMAGES[fieldId];
     if (fx && img && img.complete && img.naturalWidth > 0) {
         fx.drawAnimatedField(ctxObj, img, fieldId, GameState.globalTime);
@@ -816,6 +2293,7 @@ function drawFieldBackground(ctxObj) {
 
 // フィールド拡張: 背景上部のボスゲート表示。未達成は薄く静かに、達成後は金色に強く光らせる。
 function drawBossGateIndicator(ctxObj) {
+    if (isInLaundryPlaza) return; // 広場滞在中はフィールドのボスゲートを重ねて表示しない
     const fx = window.ZSAGA_FIELD_EXPANSION;
     const field = fx && fx.fields[GameState.currentFieldId];
     if (!field) return;
@@ -834,28 +2312,36 @@ function drawBossGateIndicator(ctxObj) {
 
 // 横視点の戦闘背景（フィールドマップとは別の専用ステージ）
 function drawBattleArena(ctxObj) {
-    const skyGrad = ctxObj.createLinearGradient(0, 0, 0, 340);
-    skyGrad.addColorStop(0, '#1b1240'); skyGrad.addColorStop(1, '#4a2f6b');
-    ctxObj.fillStyle = skyGrad; ctxObj.fillRect(0, 0, 800, 340);
+    // ステージ別の戦闘背景(静止画)。キャラクター・敵・HP・メッセージ・コマンドボタンより
+    // 必ず先(=後ろのレイヤー)に描く。background-size:coverと同じ考え方で中央基準にトリミングする。
+    const battleImg = BATTLE_BG_IMAGES[GameState.currentFieldId];
+    if (battleImg && battleImg.complete && battleImg.naturalWidth > 0) {
+        drawCoverImage(ctxObj, battleImg, 0, 0, 800, 600);
+    } else {
+        // 新背景が未読込/未対応フィールドの場合は既存の描画へフォールバックする(挙動は変更しない)
+        const skyGrad = ctxObj.createLinearGradient(0, 0, 0, 340);
+        skyGrad.addColorStop(0, '#1b1240'); skyGrad.addColorStop(1, '#4a2f6b');
+        ctxObj.fillStyle = skyGrad; ctxObj.fillRect(0, 0, 800, 340);
 
-    ctxObj.fillStyle = 'rgba(255,255,255,0.18)';
-    for (let i = 0; i < 36; i++) {
-        const x = (i * 97 + GameState.globalTime * 0.15) % 800;
-        const y = (i * 53) % 300;
-        ctxObj.fillRect(x, y, 2, 2);
+        ctxObj.fillStyle = 'rgba(255,255,255,0.18)';
+        for (let i = 0; i < 36; i++) {
+            const x = (i * 97 + GameState.globalTime * 0.15) % 800;
+            const y = (i * 53) % 300;
+            ctxObj.fillRect(x, y, 2, 2);
+        }
+
+        const groundGrad = ctxObj.createLinearGradient(0, 340, 0, 600);
+        groundGrad.addColorStop(0, '#33244f'); groundGrad.addColorStop(1, '#120c24');
+        ctxObj.fillStyle = groundGrad; ctxObj.fillRect(0, 340, 800, 260);
+
+        ctxObj.strokeStyle = 'rgba(255,255,255,0.10)'; ctxObj.lineWidth = 2;
+        for (let i = 0; i < 6; i++) {
+            const y = 340 + i * 44;
+            ctxObj.beginPath(); ctxObj.moveTo(0, y); ctxObj.lineTo(800, y); ctxObj.stroke();
+        }
     }
 
-    const groundGrad = ctxObj.createLinearGradient(0, 340, 0, 600);
-    groundGrad.addColorStop(0, '#33244f'); groundGrad.addColorStop(1, '#120c24');
-    ctxObj.fillStyle = groundGrad; ctxObj.fillRect(0, 340, 800, 260);
-
-    ctxObj.strokeStyle = 'rgba(255,255,255,0.10)'; ctxObj.lineWidth = 2;
-    for (let i = 0; i < 6; i++) {
-        const y = 340 + i * 44;
-        ctxObj.beginPath(); ctxObj.moveTo(0, y); ctxObj.lineTo(800, y); ctxObj.stroke();
-    }
-
-    // 主人公側・敵側の立ち位置を示す影
+    // 主人公側・敵側の立ち位置を示す影(新背景でも既存位置のまま維持する)
     ctxObj.fillStyle = 'rgba(0,0,0,0.45)';
     ctxObj.beginPath(); ctxObj.ellipse(200, 412, 46, 14, 0, 0, Math.PI * 2); ctxObj.fill();
     ctxObj.beginPath(); ctxObj.ellipse(600, 397, 56, 16, 0, 0, Math.PI * 2); ctxObj.fill();
@@ -877,28 +2363,55 @@ function drawGame() {
     } else {
         drawFieldBackground(ctx);
     }
+    if (!isFashionShow) FieldAmbientAnimation.draw(ctx, isBattling); // 背景の上・キャラクターと敵の下
 
     let hasTrendBuff = (GameState.avatar.style === currentTrend);
     let hx = player.x, hy = player.y;
 
     if (!isBattling) {
-        [...GameState.party].reverse().forEach((follower, i) => {
-            const delay = (GameState.party.length - i) * 12;
+        // 仲間の隊列: 3人ごとに1列(ランク)を組み、同じ列の仲間は進行方向に対して横並びになる。
+        // 人数が増えても縦一列に間延びせず、隊列を組んで綺麗についてくる。
+        const RANK_SIZE = 3;
+        const RANK_GAP = 16; // ランクごとの追従遅延(historyLogのステップ数)
+        const SLOT_OFFSET = [-16, 16, 0]; // ランク内の並び順(左・右・中央)
+        GameState.party.forEach((follower, idx) => {
+            const rank = Math.floor(idx / RANK_SIZE);
+            const slot = idx % RANK_SIZE;
+            const delay = (rank + 1) * RANK_GAP;
             const pos = historyLog[delay] || historyLog[historyLog.length - 1] || player;
-            drawFollowerSprite(follower, pos.x, pos.y, 0.9);
+            const aheadPos = historyLog[Math.max(0, delay - 5)] || historyLog[historyLog.length - 1] || player;
+            let dx = aheadPos.x - pos.x, dy = aheadPos.y - pos.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 0.01) { dx = 0; dy = 1; } else { dx /= len; dy /= len; } // 停止中は縦向き基準で横並びにする
+            const perpX = -dy, perpY = dx; // 進行方向に対して垂直(左右)のベクトル
+            const off = SLOT_OFFSET[slot] || 0;
+            drawFollowerSprite(follower, pos.x + perpX * off, pos.y + perpY * off, 0.9);
         });
         drawBossGateIndicator(ctx);
     } else if (isBattling && currentEnemy) {
-        GameState.party.forEach((follower, i) => {
+        // 交代中は前衛(activeFighter)を後衛グリッドから外し、代わりにベンチの勇者をそこに並べる
+        const benchList = activeFighter ? [GameState.avatar, ...GameState.party.filter(p => p !== activeFighter)] : GameState.party;
+        benchList.forEach((follower, i) => {
             let px = 100 - (Math.floor(i / 3) * 30), py = 300 + ((i % 3) * 60);
             drawFollowerSprite(follower, px, py, 0.9);
+            // 仲間のHPバー(数値を持つ仲間のみ)。戦闘不能は赤いバーで示す。
+            if (typeof follower.hp === 'number' && typeof follower.maxHp === 'number') {
+                const barW = 40, barX = px - barW / 2, barY = py - 46;
+                const pct = Math.max(0, follower.hp / follower.maxHp);
+                ctx.fillStyle = '#3a1010'; ctx.fillRect(barX, barY, barW, 5);
+                ctx.fillStyle = follower.hp <= 0 ? '#803030' : (pct < 0.3 ? '#e05a3a' : '#4fd06a');
+                ctx.fillRect(barX, barY, barW * pct, 5);
+                ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barW, 5);
+            }
         });
         // 踏み込み攻撃: 構え位置(200)から敵側(550)へ滑らかに前進する
         hx = 200 + 350 * attackLungeT; hy = 400;
     }
 
-    if (!isFashionShow && GameState.avatar.sprite) {
-        if (hasTrendBuff) {
+    // 前衛(交代中は仲間、通常時は勇者)を(hx,hy)に描く
+    const frontFighter = (isBattling && activeFighter) ? activeFighter : GameState.avatar;
+    if (!isFashionShow && frontFighter.sprite) {
+        if (hasTrendBuff && !activeFighter) {
             ctx.fillStyle = 'rgba(255, 255, 0, 0.4)';
             ctx.beginPath(); ctx.arc(hx, hy - 5, 30 + Math.sin(GameState.globalTime * 0.2) * 5, 0, Math.PI * 2); ctx.fill();
         }
@@ -910,23 +2423,78 @@ function drawGame() {
             ctx.fillStyle = grad;
             ctx.beginPath(); ctx.arc(hx, hy - 15, pulse, 0, Math.PI * 2); ctx.fill();
         }
-        drawSprite(ctx, GameState.avatar.sprite, hx, hy, { scale: isBattling ? 1.5 : 1 });
+        drawSprite(ctx, frontFighter.sprite, hx, hy, { scale: isBattling ? 1.5 : 1 });
+        // 交代中は前衛の仲間にも小さなHPバーを出す(後衛グリッドと同じ見た目)
+        if (isBattling && activeFighter && typeof activeFighter.hp === 'number' && typeof activeFighter.maxHp === 'number') {
+            const barW = 50, barX = hx - barW / 2, barY = hy - 95;
+            const pct = Math.max(0, activeFighter.hp / activeFighter.maxHp);
+            ctx.fillStyle = '#3a1010'; ctx.fillRect(barX, barY, barW, 6);
+            ctx.fillStyle = activeFighter.hp <= 0 ? '#803030' : (pct < 0.3 ? '#e05a3a' : '#4fd06a');
+            ctx.fillRect(barX, barY, barW * pct, 6);
+            ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barW, 6);
+        }
     }
 
     if (isBattling && currentEnemy && !isFashionShow && currentEnemy.sprite) {
         let ex = 600, ey = 380;
         ctx.globalAlpha = currentEnemy.hp <= 0 ? .3 : 1;
-        drawSprite(ctx, currentEnemy.sprite, ex, ey, { scale: 1, flipX: true });
+        // クローゼットロード/スピン・レヴィアタンだけ、既存のdragon代用画像を専用アトラスへ差し替える
+        const fieldBossRow = FIELD_BOSS_ROW[currentEnemy.bossKey];
+        if (fieldBossRow !== undefined && fieldBossActionsImg.complete && fieldBossActionsImg.naturalWidth > 0) {
+            const cellW = fieldBossActionsImg.naturalWidth / FIELD_BOSS_ATLAS_COLS;
+            const cellH = fieldBossActionsImg.naturalHeight / FIELD_BOSS_ATLAS_ROWS;
+            const col = fieldBossFrameIndex >= 0 ? fieldBossFrameIndex : 0;
+            const dh = 170; const dw = dh * (cellW / cellH);
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(fieldBossActionsImg, col * cellW, fieldBossRow * cellH, cellW, cellH, ex - dw / 2, ey - dh, dw, dh);
+        } else {
+            drawSprite(ctx, currentEnemy.sprite, ex, ey, { scale: 1, flipX: true });
+        }
         ctx.globalAlpha = 1;
+        // ボス攻撃予告(紫=クローゼットロード / 水色=スピン・レヴィアタン)
+        if (fieldBossWarningTimer > 0 && fieldBossWarningColor) {
+            ctx.save();
+            const pulse = 40 + Math.sin(GameState.globalTime * 0.5) * 10;
+            ctx.globalAlpha = 0.5;
+            ctx.strokeStyle = fieldBossWarningColor; ctx.lineWidth = 5;
+            ctx.beginPath(); ctx.arc(ex, ey - 60, pulse, 0, Math.PI * 2); ctx.stroke();
+            ctx.restore();
+        }
         if (slashEffectTimer > 0) { ctx.lineWidth = 4; ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(ex - 30, ey - 30); ctx.lineTo(ex + 30, ey + 30); ctx.stroke(); ctx.beginPath(); ctx.moveTo(ex + 30, ey - 30); ctx.lineTo(ex - 30, ey + 30); ctx.stroke(); }
+        // ルーナのスキル命中演出: 黄色い円 + 布の目盛り状の目盛り線(敵の位置)
+        if (lunaImpactEffectTimer > 0) {
+            const r = 34;
+            ctx.save();
+            ctx.globalAlpha = Math.min(1, lunaImpactEffectTimer / 16);
+            ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.arc(ex, ey, r, 0, Math.PI * 2); ctx.stroke();
+            for (let t = 0; t < 12; t++) {
+                const ang = (t / 12) * Math.PI * 2;
+                const inner = r - (t % 3 === 0 ? 10 : 5);
+                ctx.beginPath();
+                ctx.moveTo(ex + Math.cos(ang) * r, ey + Math.sin(ang) * r);
+                ctx.lineTo(ex + Math.cos(ang) * inner, ey + Math.sin(ang) * inner);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+        // ゾンのスキル命中演出: 橙赤のX字裁断エフェクト(敵の位置)
+        if (zonImpactEffectTimer > 0) {
+            ctx.save();
+            ctx.globalAlpha = Math.min(1, zonImpactEffectTimer / 14);
+            ctx.strokeStyle = '#ff6b32'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.moveTo(ex - 34, ey - 34); ctx.lineTo(ex + 34, ey + 34); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(ex + 34, ey - 34); ctx.lineTo(ex - 34, ey + 34); ctx.stroke();
+            ctx.restore();
+        }
     }
 
     ctx.globalCompositeOperation = 'lighter';
     particles.forEach(p => { ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 6, 6); });
     ctx.globalCompositeOperation = 'source-over';
 
-    ctx.fillStyle = 'red'; ctx.font = "bold 32px DotGothic16"; ctx.shadowColor = 'white'; ctx.shadowBlur = 4;
-    dmgTexts.forEach(dt => ctx.fillText(dt.text, dt.x, dt.y)); ctx.shadowBlur = 0;
+    ctx.font = "bold 32px DotGothic16"; ctx.shadowColor = 'white'; ctx.shadowBlur = 4;
+    dmgTexts.forEach(dt => { ctx.fillStyle = dt.color || 'red'; ctx.fillText(dt.text, dt.x, dt.y); }); ctx.shadowBlur = 0;
     ctx.restore();
 }
 
@@ -957,12 +2525,18 @@ function toggleMenu() {
             const li = document.createElement('li');
             // 重複召喚で強化された分(Lv/継承回数/攻撃補正/スキルLv)を共通表示する
             const growthLabel = `Lv.${p.level || 1}${p.duplicateCount ? ` (継承${p.duplicateCount}回 / 攻撃+${p.atkBonusPct || 0}% / スキルLv${p.skillLevel || 1})` : ''}`;
+            const hpKnown = typeof p.hp === 'number' && typeof p.maxHp === 'number';
+            const isKO = hpKnown && p.hp <= 0;
+            const hpLabel = hpKnown ? ` / HP:${Math.max(0, p.hp)}/${p.maxHp}${isKO ? ' 💤戦闘不能' : ''}` : '';
             if (p.job === '魔物') {
-                li.textContent = `${p.name} (元・${p.originItem}の主) ${growthLabel}`;
+                li.textContent = `${p.name} (元・${p.originItem}の主) ${growthLabel}${hpLabel}`;
             } else {
                 const visual = ALLY_VISUALS[p.job] || ALLY_VISUALS['裁断戦士'];
-                li.className = `party-member-row ${visual.roleClass}`;
-                li.innerHTML = `<span class="party-sprite" style="--ally-sprite:url('${visual.path}')"></span><span>✨${p.name}<small>${visual.label} / ${p.style} / ${p.rarity} / ${growthLabel}</small></span>`;
+                const isAsteria = p.name === ASTERIA_NAME;
+                const spritePath = isAsteria ? ASTERIA_PORTRAIT_PATH : visual.path;
+                const spriteClass = isAsteria ? ' is-asteria-portrait' : '';
+                li.className = `party-member-row ${visual.roleClass}${isKO ? ' is-knocked-out' : ''}`;
+                li.innerHTML = `<span class="party-sprite${spriteClass}" style="--ally-sprite:url('${spritePath}')"></span><span>✨${p.name}<small>${visual.label} / ${p.style} / ${p.rarity} / ${growthLabel}${hpLabel}</small></span>`;
             }
             list.appendChild(li);
         });
@@ -986,7 +2560,8 @@ function renderTailorWorkshop() {
         const li = document.createElement('li');
         li.style.display = 'flex'; li.style.justifyContent = 'space-between'; li.style.alignItems = 'center'; li.style.margin = '5px 0';
         const label = document.createElement('span');
-        label.textContent = `${ally.name} Lv.${level}`;
+        const koLabel = ally.hp <= 0 ? '(戦闘不能)' : '';
+        label.textContent = `${ally.name} Lv.${level} HP:${Math.max(0, ally.hp || 0)}/${ally.maxHp || getAllyMaxHp(ally)}${koLabel}`;
         const btn = document.createElement('button');
         btn.className = 'retro-btn small-btn';
         btn.textContent = `▶ Lvアップ (${cost}G)`;
@@ -1004,6 +2579,8 @@ function levelUpAllyWithGold(ally) {
     if (GameState.gold < cost) { playSound('hit'); return; }
     updateGold(-cost);
     ally.level = level + 1;
+    ally.maxHp = getAllyMaxHp(ally);
+    ally.hp = ally.maxHp; // Lvアップで全回復する(戦闘不能からも復帰する)
     playSound('fanfare');
     renderTailorWorkshop();
 }
@@ -1035,10 +2612,11 @@ function changeField(nextFieldId) {
     player.x = 400; player.y = 500; historyLog.length = 0;
     updateFieldDialogText();
     fx.switchFieldMusic(nextFieldId, audioBridge); // 背景更新の直後に必ず1回だけ呼ぶ
+    FieldAmbientAnimation.start(nextFieldId); // 前ステージの環境アニメーションを止めて切り替える
 }
 
 function openFieldTravel() {
-    if (isBattling || isMenuOpen || isShopOpen || isFashionShow) return;
+    if (isBattling || isMenuOpen || isShopOpen || isFashionShow || isInLaundryPlaza) return;
     playSound('select');
     const fx = window.ZSAGA_FIELD_EXPANSION;
     const list = document.getElementById('field-travel-list');
@@ -1061,6 +2639,15 @@ function openFieldTravel() {
         }
         list.appendChild(li);
     });
+    // 回復アイテムを集められる「泡織りの洗濯広場」へ、どのフィールドからでもいつでも行けるようにする
+    const plazaLi = document.createElement('li');
+    plazaLi.style.margin = '6px 0';
+    const plazaBtn = document.createElement('button');
+    plazaBtn.className = 'retro-btn cmd-btn';
+    plazaBtn.textContent = '▶ 💭 泡織りの洗濯広場(回復)';
+    plazaBtn.addEventListener('click', () => { closeFieldTravel(); enterLaundryPlaza(); });
+    plazaLi.appendChild(plazaBtn);
+    list.appendChild(plazaLi);
     document.getElementById('field-travel-panel').classList.remove('hidden');
 }
 function closeFieldTravel() { document.getElementById('field-travel-panel').classList.add('hidden'); }
@@ -1069,7 +2656,11 @@ document.getElementById('btn-field-travel-close').addEventListener('click', clos
 document.getElementById('btn-open-shop-direct').addEventListener('click', openShopDirect);
 
 window.addEventListener('keydown', e => {
-    if (!isMenuOpen && !isShopOpen && !isFashionShow) keys[e.key] = true;
+    // 冒険開始前(祭壇/タイトル画面)ではショートカットを無効にする。
+    // 特にG(召喚)は画面が隠れたまま裏で召喚BGMだけが鳴り続けてしまうバグの原因だった。
+    if (!gameLoopId) return;
+    if (!isMenuOpen && !isShopOpen && !isFashionShow && !isGameOver) keys[e.key] = true;
+    if (isGameOver) return; // ゲームオーバー・回復の間ではメニュー等のショートカットも無効にする
     if ((e.key === 'm' || e.key === 'M') && !isShopOpen) toggleMenu();
     if (e.key === 'g' || e.key === 'G') openShopDirect();
     if (e.key === 'f' || e.key === 'F') openFieldTravel();
@@ -1094,11 +2685,12 @@ function startGame() {
     playFastEpicBGM(false); player.x = 190; player.y = 190; historyLog.length = 0; GameState.party = []; updateGold(0);
     GameState.avatar.sprite = new SpriteAnimator('hero', GameState.avatar.job);
     currentTrend = ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)]; // Init trend
+    FieldAmbientAnimation.start('azurlight');
     if (!gameLoopId) loop();
 }
 document.getElementById('btn-start-adventure').addEventListener('click', startGame);
 document.getElementById('btn-skip').addEventListener('click', () => {
-    GameState.avatar = { name: '伝説の紋章・ゼアル', job: '勇者', style: '炎', color: '#ff4500', hp: 150, maxHp: 150, mp: 100, agi: 80, tension: 50 };
+    GameState.avatar = { name: '伝説の紋章・ゼアル', job: '勇者', style: '炎', color: '#ff4500', hp: 150, maxHp: 150, mp: 100, maxMp: 100, agi: 80, tension: 50 };
     startGame(); updateGold(500);
 });
 
@@ -1188,7 +2780,7 @@ document.getElementById('btn-summon').addEventListener('click', () => {
     const total = rankData.buildupMs;
     clearGachaRankClasses();
     summonArea.classList.add(`summon-rank-${rankData.key.toLowerCase()}`);
-    playRankSummonBGM(rankData.key); // レア度別オリジナルBGMを召喚中ずっと再生
+    BGMManager.playBGM('summon:' + rankData.key, () => playRankSummonBGM(rankData.key)); // レア度別オリジナルBGMを召喚中ずっと再生
 
     const messages = rankData.shakeLv >= 3 ? SUSPENSE_HIGH : (rankData.shakeLv >= 1 ? SUSPENSE_MID : SUSPENSE_LOW);
     let msgIdx = 0;
@@ -1226,9 +2818,13 @@ document.getElementById('btn-summon').addEventListener('click', () => {
         // 召喚された仲間のスプライトを画面中央へ大きく表示するマークアップを組み立てる。
         // S以上は最初シルエット(黒塗り)で登場させ、カットインの後に本カラーへ切り替える。
         const buildResultMarkup = (silhouette) => {
+            // アステアだけ専用ポートレートを使う(名前一致時のみ。他キャラの表示は変更しない)
+            const isAsteria = picked.name === ASTERIA_NAME;
+            const spritePath = isAsteria ? ASTERIA_PORTRAIT_PATH : allyVisual.path;
+            const spriteClass = isAsteria ? ' is-asteria-portrait' : '';
             document.getElementById('summon-result').innerHTML = `
               <div class="gacha-reveal rank-${rankData.key.toLowerCase()} ${allyVisual.roleClass}">
-                <div class="summoned-ally big ${silhouette ? 'silhouette' : ''}" style="--ally-sprite:url('${allyVisual.path}')"></div>
+                <div class="summoned-ally big${spriteClass} ${silhouette ? 'silhouette' : ''}" style="--ally-sprite:url('${spritePath}')"></div>
                 <div class="gacha-card rarity-${rankData.key.toLowerCase()}">
                   <div class="gacha-rank">${rankData.title}</div>
                   <h3 style="color:${picked.color}; margin-top:4px;">${picked.name}</h3>
@@ -1308,10 +2904,61 @@ function updateHeroHUD() {
     if (heroHpText) heroHpText.textContent = Math.round(av.hp);
     if (heroMpText) heroMpText.textContent = Math.round(av.mp);
     document.getElementById('ui-hp').textContent = Math.round(av.hp);
+    updateItemButtonLabel();
+}
+
+// 「アイテム(回復)」ボタンに現在の回復薬所持数を表示する
+function updateItemButtonLabel() {
+    const btn = document.getElementById('btn-item');
+    if (btn) btn.textContent = `▶ アイテム(回復薬×${(GameState.items && GameState.items.potion) || 0})`;
 }
 
 // 敵の反撃。A/Sランクほど発生しやすく、専用技（通常反撃の強化版）が出ることもある。
+// 対象は勇者+生存している仲間からランダムに1体を選ぶ(既存の反撃確率・ダメージ計算式は変更しない)。
 const ENEMY_SPECIAL_NAMES = { mid: '服飾呪縛', boss: '百鬼衣装絶' };
+
+// 反撃の対象をランダムに1体選ぶ({type:'hero'} または {type:'ally', ally})
+function pickCounterTarget() {
+    const livingAllies = GameState.party.filter(p => typeof p.hp !== 'number' || p.hp > 0);
+    if (activeFighter) {
+        // 交代中: 矢面に立つ仲間を勇者の代わりに抽選プールへ入れ、ベンチの勇者は他の仲間と同列で混ぜる
+        const benchAllies = livingAllies.filter(a => a !== activeFighter);
+        const pool = [{ type: 'ally', ally: activeFighter }, { type: 'hero' }, ...benchAllies.map(a => ({ type: 'ally', ally: a }))];
+        return pool[Math.floor(Math.random() * pool.length)];
+    }
+    const pool = [{ type: 'hero' }, ...livingAllies.map(a => ({ type: 'ally', ally: a }))];
+    return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// 抽選済みの対象(勇者 or 仲間)へ、既に算出済みのdmgを1回だけ適用する共通処理
+function applyCounterDamage(target, dmg, isSpecial) {
+    if (target && target.type === 'ally') {
+        const ally = target.ally;
+        dmg = Math.round(dmg * getElementMultiplier(currentEnemy.style, ally.style)); // 属性の三すくみ補正(敵→仲間)
+        const before = typeof ally.hp === 'number' ? ally.hp : (ally.maxHp || getAllyMaxHp(ally));
+        ally.hp = Math.max(0, before - dmg);
+        if (ally.sprite) ally.sprite.triggerHit({ hitStopFrames: isSpecial ? 10 : 5, flashFrames: isSpecial ? 24 : 12, knockbackPower: isSpecial ? 10 : 5, fromX: 1, fromY: 0, toX: 0, toY: 0.15 });
+        screenShakeTimer = Math.max(screenShakeTimer, isSpecial ? 24 : 12);
+        playSound(isSpecial ? 'magic' : 'hit');
+        showDamage(100, 330, dmg);
+        const koText = ally.hp <= 0 ? `<br>⚠️ ${ally.name}は戦闘不能になった！` : '';
+        bMsg.innerHTML += (isSpecial
+            ? `<br>⚔️【${currentEnemy.name}の専用技「${ENEMY_SPECIAL_NAMES[currentEnemy.tier]}」】反撃！ ${ally.name}は${dmg}ダメージを受けた！`
+            : `<br>${currentEnemy.name}の反撃！ ${ally.name}は${dmg}ダメージを受けた！`) + koText;
+    } else {
+        dmg = Math.round(dmg * getElementMultiplier(currentEnemy.style, GameState.avatar.style)); // 属性の三すくみ補正(敵→勇者)
+        GameState.avatar.hp = Math.max(0, GameState.avatar.hp - dmg); // 0まで減る(ゲームオーバー判定に使う)
+        updateHeroHUD();
+        if (GameState.avatar.sprite) GameState.avatar.sprite.triggerHit({ hitStopFrames: isSpecial ? 10 : 5, flashFrames: isSpecial ? 24 : 12, knockbackPower: isSpecial ? 10 : 5, fromX: 1, fromY: 0, toX: 0, toY: 0.15 });
+        screenShakeTimer = Math.max(screenShakeTimer, isSpecial ? 24 : 12);
+        playSound(isSpecial ? 'magic' : 'hit');
+        showDamage(200, 380, dmg);
+        bMsg.innerHTML += isSpecial
+            ? `<br>⚔️【${currentEnemy.name}の専用技「${ENEMY_SPECIAL_NAMES[currentEnemy.tier]}」】反撃！ 勇者は${dmg}ダメージを受けた！`
+            : `<br>${currentEnemy.name}の反撃！ 勇者は${dmg}ダメージを受けた！`;
+    }
+}
+
 function enemyCounterAttack(onDone) {
     if (!currentEnemy || currentEnemy.hp <= 0) { if (onDone) onDone(); return; }
     const counterChance = currentEnemy.tier === 'boss' ? 0.45 : (currentEnemy.tier === 'mid' ? 0.30 : 0.15);
@@ -1324,33 +2971,87 @@ function enemyCounterAttack(onDone) {
     const fieldCfg = window.ZSAGA_FIELD_EXPANSION && window.ZSAGA_FIELD_EXPANSION.fields[GameState.currentFieldId];
     const fieldAtkMult = fieldCfg ? fieldCfg.enemyAttackMultiplier : 1;
     const dmg = Math.max(1, Math.round(randInt(15, 30) * tierMulti * fieldAtkMult * (isSpecial ? 1.6 : 1)));
+    const target = pickCounterTarget();
 
-    GameState.avatar.hp = Math.max(1, GameState.avatar.hp - dmg);
-    updateHeroHUD();
-    if (GameState.avatar.sprite) GameState.avatar.sprite.triggerHit({ hitStopFrames: isSpecial ? 10 : 5, flashFrames: isSpecial ? 24 : 12, knockbackPower: isSpecial ? 10 : 5, fromX: 1, fromY: 0, toX: 0, toY: 0.15 });
-    screenShakeTimer = Math.max(screenShakeTimer, isSpecial ? 24 : 12);
-    playSound(isSpecial ? 'magic' : 'hit');
-    showDamage(200, 380, dmg);
+    // 反撃後、勇者のHPが0、または仲間が全滅していたらゲームオーバーへ切り替える(通常のonDoneは呼ばない)
+    const finish = () => {
+        if (GameState.avatar.hp <= 0) { triggerGameOver('hero'); return; }
+        if (isPartyWiped()) { triggerGameOver('party'); return; }
+        if (onDone) onDone();
+    };
 
-    bMsg.innerHTML += isSpecial
-        ? `<br>⚔️【${currentEnemy.name}の専用技「${ENEMY_SPECIAL_NAMES[currentEnemy.tier]}」】反撃！ 勇者は${dmg}ダメージを受けた！`
-        : `<br>${currentEnemy.name}の反撃！ 勇者は${dmg}ダメージを受けた！`;
+    // クローゼットロード/スピン・レヴィアタン専用の攻撃演出(確率・ダメージ計算式はすべて上と同じものを使う)
+    if (currentEnemy.bossKey === 'wardrobe_lord' || currentEnemy.bossKey === 'spin_leviathan') {
+        playFieldBossAttackSequence(dmg, isSpecial, finish, target);
+        return;
+    }
 
-    setTimeout(() => { if (onDone) onDone(); }, 700);
+    applyCounterDamage(target, dmg, isSpecial);
+    setTimeout(finish, 700);
 }
+
+// ==========================================
+// ゲームオーバー → 回復の間
+// 発生条件: (1)勇者のHPが0になった、または (2)仲間が1人以上いる状態で全員戦闘不能になった(全滅)。
+// 既存の戦闘終了処理(逃げる・勝利)には触れない。
+// ==========================================
+let isGameOver = false;
+
+// 仲間が1人以上いて、かつ全員が戦闘不能(HP0)かどうか。仲間がいない場合はfalse(全滅とはみなさない)。
+function isPartyWiped() {
+    const trackedAllies = GameState.party.filter(p => typeof p.hp === 'number');
+    if (trackedAllies.length === 0) return false;
+    return trackedAllies.every(p => p.hp <= 0);
+}
+
+function triggerGameOver(reason) {
+    if (isGameOver) return; // 二重発動防止
+    isGameOver = true;
+    isBattling = false; currentEnemy = null; battleViewState = 'idle'; activeFighter = null;
+    battleDlg.classList.add('hidden');
+    stopBGM(); // 戦闘BGMを止める(重複再生防止。回復の間・復帰後の再生は別途行う)
+    playSound('hit');
+    const gameoverText = document.getElementById('gameover-text');
+    if (gameoverText) {
+        gameoverText.textContent = reason === 'party'
+            ? '仲間は全滅した…勇者だけが立ち尽くす…'
+            : '勇者は力尽きた…意識が遠のいていく…';
+    }
+    document.getElementById('game-screen').classList.replace('active', 'hidden');
+    document.getElementById('gameover-screen').classList.replace('hidden', 'active');
+    setTimeout(enterRecoveryRoom, 2200);
+}
+
+function enterRecoveryRoom() {
+    document.getElementById('gameover-screen').classList.replace('active', 'hidden');
+    // 全回復(戦闘不能だった仲間も含む)。フィールドの位置は元のまま変更しない。
+    GameState.avatar.hp = GameState.avatar.maxHp || 100;
+    GameState.avatar.mp = GameState.avatar.maxMp || 50;
+    GameState.party.forEach(p => { if (typeof p.hp === 'number') p.hp = p.maxHp || getAllyMaxHp(p); });
+    updateHeroHUD();
+    document.getElementById('recovery-screen').classList.replace('hidden', 'active');
+}
+
+document.getElementById('btn-recovery-return').addEventListener('click', () => {
+    document.getElementById('recovery-screen').classList.replace('active', 'hidden');
+    document.getElementById('game-screen').classList.replace('hidden', 'active');
+    isGameOver = false;
+    playFastEpicBGM(false); // 元いたフィールド(currentFieldIdは変更していない)のBGMを再生する
+});
 
 function startEncounter() {
     if (isMenuOpen || isShopOpen || isFashionShow) return; isBattling = true; keys['ArrowUp'] = keys['ArrowDown'] = keys['ArrowLeft'] = keys['ArrowRight'] = false;
-    stopBGM(); playSound('noise'); document.getElementById('game-screen').classList.add('screen-shake'); document.getElementById('encounter-effect').classList.remove('hidden');
+    BGMManager.stop(); playSound('noise'); document.getElementById('game-screen').classList.add('screen-shake'); document.getElementById('encounter-effect').classList.remove('hidden');
     attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0;
     setTimeout(() => {
         document.getElementById('game-screen').classList.remove('screen-shake'); document.getElementById('encounter-effect').classList.add('hidden');
-        currentEnemy = generateEnemy(GameState.avatar.style); battleViewState = 'idle'; updateHPUI(); updateHeroHUD();
+        currentEnemy = generateEnemy(); battleViewState = 'idle'; updateHPUI(); updateHeroHUD(); // 敵の属性は勇者と同じにせず、毎回ランダムにする
         // 戦闘中は主人公・仲間とも敵側(右)を向かせる
         if (GameState.avatar.sprite) { GameState.avatar.sprite.dir = DIR.RIGHT; GameState.avatar.sprite.setAction('idle'); }
         GameState.party.forEach(p => { if (p.sprite) { p.sprite.dir = DIR.RIGHT; p.sprite.setAction('idle'); } });
         bName.textContent = `⚠️ 【${currentEnemy.name}】[${currentEnemy.rankLabel}ランク] が現れた！`; bMsg.textContent = `「その力、まだ我には及ばぬな…」`;
-        bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden'); playFastEpicBGM(true);
+        bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden');
+        startBattleBGM(); // 敵の種類が確定してから戦闘BGMをBGMManager経由で1回だけ開始する
     }, 1200);
 }
 
@@ -1372,7 +3073,7 @@ function buildFieldBoss(fieldId) {
         hp: b.hp, maxHp: b.hp, goldDrop: b.gold,
         normalResist: cfg.normalResist, barrierThresholdPct: cfg.barrierThresholdPct,
         barrierActive: false, barrierBroken: false,
-        isFieldBoss: true, fieldId: fieldId,
+        isFieldBoss: true, fieldId: fieldId, bossKey: b.key, // bossKey: 専用演出の判定用に追加(既存フィールドは変更しない)
         sprite: new SpriteAnimator('enemy', spriteKey)
     };
 }
@@ -1380,7 +3081,7 @@ function buildFieldBoss(fieldId) {
 function startFieldBossEncounter(fieldId) {
     if (isMenuOpen || isShopOpen || isFashionShow || isBattling) return;
     isBattling = true; keys['ArrowUp'] = keys['ArrowDown'] = keys['ArrowLeft'] = keys['ArrowRight'] = false;
-    stopBGM(); playSound('noise'); document.getElementById('game-screen').classList.add('screen-shake'); document.getElementById('encounter-effect').classList.remove('hidden');
+    BGMManager.stop(); playSound('noise'); document.getElementById('game-screen').classList.add('screen-shake'); document.getElementById('encounter-effect').classList.remove('hidden');
     attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0;
     setTimeout(() => {
         document.getElementById('game-screen').classList.remove('screen-shake'); document.getElementById('encounter-effect').classList.add('hidden');
@@ -1389,33 +3090,48 @@ function startFieldBossEncounter(fieldId) {
         GameState.party.forEach(p => { if (p.sprite) { p.sprite.dir = DIR.RIGHT; p.sprite.setAction('idle'); } });
         bName.textContent = `⚠️ 【${currentEnemy.name}】[${currentEnemy.rankLabel}ランク] が現れた！`;
         bMsg.textContent = `フィールドの守護者が立ちはだかる…`;
-        bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden'); playFastEpicBGM(true);
+        bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden');
+        startBattleBGM();
     }, 1200);
 }
 
 function executeAttack(damageMulti = 1, attackTypeStr = '攻撃', isPiercing = false) {
     if (battleViewState !== 'idle' || !currentEnemy) return;
+    // 交代中の仲間が反撃で戦闘不能になっていたら、自動的に勇者へ戻す(戦闘不能のまま行動させない)
+    if (activeFighter && typeof activeFighter.hp === 'number' && activeFighter.hp <= 0) activeFighter = null;
     battleViewState = 'attacking'; bActions.classList.add('hidden'); playSound('slash');
     slashEffectTimer = 15; screenShakeTimer = 20;
     attackLungeDir = 1; setTimeout(() => { attackLungeDir = -1; }, 260); // 踏み込み攻撃: 前進してから構え位置へ戻る
-    if (GameState.avatar.sprite) GameState.avatar.sprite.setAction('attack'); // 攻撃中は移動を制限(既にbattleViewStateで制限済み)
 
-    // Check Perfect Fit Connect
-    let perfectFitAllies = GameState.party.filter(p => p.style === GameState.avatar.style || p.style === currentEnemy.style);
+    // 交代中は「たたかう」を今の主戦力(仲間)が行う。ベンチの勇者は攻撃しない。
+    const attacker = activeFighter || GameState.avatar;
+    if (attacker.sprite) attacker.sprite.setAction('attack'); // 攻撃中は移動を制限(既にbattleViewStateで制限済み)
 
-    const tensionScore = GameState.avatar.tension || 0;
-    const rawDmg = Math.floor((Math.random() * 30 + 50) * damageMulti + (tensionScore / 5));
+    // Check Perfect Fit Connect(主戦力と同じ仲間は連携に含めない)
+    let perfectFitAllies = GameState.party.filter(p => p !== activeFighter && (p.style === attacker.style || p.style === currentEnemy.style) && (typeof p.hp !== 'number' || p.hp > 0));
+
+    let rawDmg;
+    if (activeFighter) {
+        const base = getAllyAttackBase(activeFighter, 'select');
+        rawDmg = Math.round(base * getAllyDamageMultiplier(activeFighter) * damageMulti);
+    } else {
+        const tensionScore = GameState.avatar.tension || 0;
+        rawDmg = Math.floor((Math.random() * 30 + 50) * damageMulti + (tensionScore / 5));
+    }
+    const elemMulti = getElementMultiplier(attacker.style, currentEnemy.style); // 属性の三すくみ補正
+    rawDmg = Math.round(rawDmg * elemMulti);
     // 主人公スキル「衣装奥義・シームブレイク」(isPiercing)のみ、A/Sランクの障壁を貫通できる
     const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
     updateHPUI();
     if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 6, flashFrames: 16, knockbackPower: 8, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
 
+    const elemLabel = elemMulti > 1 ? '(効果は抜群だ！)' : (elemMulti < 1 ? '(効果はいまひとつ…)' : '');
     if (blocked) {
         showDamage(600, 360, 0);
         bMsg.textContent = `🛡️ 障壁が攻撃を阻んだ！ スキルか属性連携で破れ！`;
     } else {
         showDamage(600, 360, dmg);
-        bMsg.textContent = `勇者の${attackTypeStr}！ ${dmg} のダメージ！`;
+        bMsg.textContent = `${attacker.name}の${attackTypeStr}！ ${dmg} のダメージ！${elemLabel}`;
     }
 
     if (currentEnemy.hp <= 0) {
@@ -1443,8 +3159,8 @@ function perfectFitPhase(allies) {
         screenShakeTimer = 30;
         let totalRawDmg = 0;
         allies.forEach(ally => {
-            let base = ally.job === '染色術師' ? 120 : (ally.job === '採寸弓師' ? 80 : 40);
-            let dmg = Math.round(base * getAllyDamageMultiplier(ally));
+            let base = getAllyAttackBase(ally, 'perfectfit');
+            let dmg = Math.round(base * getAllyDamageMultiplier(ally) * getElementMultiplier(ally.style, currentEnemy.style)); // 属性の三すくみ補正
             totalRawDmg += dmg;
             if (ally.job === '染色術師') spawnMagicParticles(200, 300, 600, 380, '#e85bb5');
             for (let i = 0; i < 3; i++) showDamage(600 + (Math.random() * 60 - 30), 380 + (Math.random() * 60 - 30), Math.round(dmg / 3));
@@ -1501,8 +3217,10 @@ function coOpPhase() {
             return;
         }
         let ally = GameState.party[index];
-        let base = ally.job === '染色術師' ? 80 : (ally.job === '採寸弓師' ? 50 : 20);
-        let rawDmg = Math.round(base * getAllyDamageMultiplier(ally));
+        if (typeof ally.hp === 'number' && ally.hp <= 0) { attackAlly(index + 1); return; } // 戦闘不能の仲間は追撃に参加しない
+        if (ally === activeFighter) { attackAlly(index + 1); return; } // 交代中の主戦力は既に自分の攻撃を終えているので追撃には参加しない
+        let base = getAllyAttackBase(ally, 'coop');
+        let rawDmg = Math.round(base * getAllyDamageMultiplier(ally) * getElementMultiplier(ally.style, currentEnemy.style)); // 属性の三すくみ補正
         if (ally.sprite) { ally.sprite.setAction('attack'); setTimeout(() => ally.sprite.setAction('idle'), 300); }
         if (ally.job === '染色術師') { playSound('magic'); spawnMagicParticles(200, 300, 600, 380, '#e85bb5'); screenShakeTimer = 10; }
         else if (ally.job === '採寸弓師') { playSound('slash'); showDamage(610, 350, 15); showDamage(590, 370, 15); showDamage(620, 380, 20); }
@@ -1533,16 +3251,38 @@ const allySelectPanel = document.getElementById('ally-select-panel');
 
 function openAllySelect() {
     if (battleViewState !== 'idle' || !currentEnemy) return;
-    if (GameState.party.length === 0) { bMsg.textContent = `一緒に戦う仲間がいない…`; return; }
+    if (GameState.party.length === 0 && !activeFighter) { bMsg.textContent = `一緒に戦う仲間がいない…`; return; }
+    // 戦闘不能(HP0)の仲間は選択できない(総追撃からも別途除外する)
+    const availableAllies = GameState.party.filter(a => typeof a.hp !== 'number' || a.hp > 0);
+    if (availableAllies.length === 0 && !activeFighter) { bMsg.textContent = `仲間は全員戦闘不能で動けない…`; return; }
     playSound('select');
     bActions.classList.add('hidden');
     allySelectPanel.innerHTML = '';
-    GameState.party.forEach(ally => {
+
+    // 交代中は、勇者と完全に交代して戻すボタンを一番上に出す
+    if (activeFighter) {
+        const heroBtn = document.createElement('button');
+        heroBtn.className = 'retro-btn cmd-btn';
+        heroBtn.textContent = `🔄 ${GameState.avatar.name}(勇者)と交代する`;
+        heroBtn.addEventListener('click', () => swapActiveFighter('hero'));
+        allySelectPanel.appendChild(heroBtn);
+    }
+
+    availableAllies.forEach(ally => {
+        const hpLabel = typeof ally.hp === 'number' ? ` HP:${ally.hp}/${ally.maxHp}` : '';
         const btn = document.createElement('button');
         btn.className = 'retro-btn cmd-btn';
-        btn.textContent = `▶ ${ally.name} [${ally.job} Lv.${ally.level || 1}]`;
+        btn.textContent = `▶ ${ally.name} [${ally.job} Lv.${ally.level || 1}${hpLabel}]`;
         btn.addEventListener('click', () => commandAllyAttack(ally));
         allySelectPanel.appendChild(btn);
+
+        if (ally !== activeFighter) {
+            const swapBtn = document.createElement('button');
+            swapBtn.className = 'retro-btn cmd-btn';
+            swapBtn.textContent = `🔄 ${ally.name}と交代する`;
+            swapBtn.addEventListener('click', () => swapActiveFighter(ally));
+            allySelectPanel.appendChild(swapBtn);
+        }
     });
     const backBtn = document.createElement('button');
     backBtn.className = 'retro-btn cmd-btn';
@@ -1550,6 +3290,28 @@ function openAllySelect() {
     backBtn.addEventListener('click', closeAllySelect);
     allySelectPanel.appendChild(backBtn);
     allySelectPanel.classList.remove('hidden');
+}
+
+// 「仲間を選ぶ」から仲間と完全に交代する: 以後「たたかう」はその仲間が行い、敵の反撃もその仲間を優先して狙う。
+// もう一度開いて勇者(または他の仲間)を選べば交代し直せる。交代自体も1ターン使う(敵の反撃を受けうる)。
+function swapActiveFighter(target) {
+    if (battleViewState !== 'idle' || !currentEnemy) return;
+    const nextFighter = (target === 'hero') ? null : target;
+    if (nextFighter === activeFighter) { allySelectPanel.classList.add('hidden'); bActions.classList.remove('hidden'); return; }
+    allySelectPanel.classList.add('hidden');
+    battleViewState = 'attacking';
+    playSound('select');
+    activeFighter = nextFighter;
+    const activeName = activeFighter ? activeFighter.name : GameState.avatar.name;
+    if (GameState.avatar.sprite) { GameState.avatar.sprite.dir = DIR.RIGHT; GameState.avatar.sprite.setAction('idle'); }
+    GameState.party.forEach(p => { if (p.sprite) { p.sprite.dir = DIR.RIGHT; p.sprite.setAction('idle'); } });
+    bMsg.textContent = `🔄 ${activeName}と交代した！`;
+    setTimeout(() => {
+        enemyCounterAttack(() => {
+            battleViewState = 'idle';
+            bActions.classList.remove('hidden');
+        });
+    }, 700);
 }
 
 function closeAllySelect() {
@@ -1560,13 +3322,63 @@ function closeAllySelect() {
 
 function commandAllyAttack(ally) {
     if (battleViewState !== 'idle' || !currentEnemy) return;
+    if (typeof ally.hp === 'number' && ally.hp <= 0) return; // 戦闘不能の仲間は行動できない
     allySelectPanel.classList.add('hidden');
     battleViewState = 'attacking';
     playSound('select');
 
     // 指名攻撃は総追撃(coOpPhase)より一撃が重い
-    const base = ally.job === '染色術師' ? 100 : (ally.job === '採寸弓師' ? 65 : 30);
-    const rawDmg = Math.round(base * getAllyDamageMultiplier(ally));
+    const base = getAllyAttackBase(ally, 'select');
+    const rawDmg = Math.round(base * getAllyDamageMultiplier(ally) * getElementMultiplier(ally.style, currentEnemy.style)); // 属性の三すくみ補正
+
+    // アステア専用スキル演出(名前一致時のみ。ダメージ計算式・MP消費・スキル効果自体は変更しない。
+    // アステア以外は以下の従来処理をそのまま使う)
+    if (ally.name === ASTERIA_NAME) {
+        const isPiercingAsteria = (ally.style === GameState.avatar.style || ally.style === currentEnemy.style);
+        playAsteriaSkillSequence(ally, rawDmg, isPiercingAsteria, () => {
+            if (currentEnemy.hp <= 0) { setTimeout(() => triggerCirculation(), 800); return; }
+            setTimeout(() => {
+                enemyCounterAttack(() => {
+                    battleViewState = 'idle';
+                    bActions.classList.remove('hidden');
+                });
+            }, 900);
+        });
+        return;
+    }
+
+    // ルーナ専用スキル演出(名前一致時のみ。ダメージ計算式・MP消費・スキル効果自体は変更しない。
+    // アステア・ルーナ以外は以下の従来処理をそのまま使う)
+    if (ally.name === LUNA_NAME) {
+        const isPiercingLuna = (ally.style === GameState.avatar.style || ally.style === currentEnemy.style);
+        playLunaSkillSequence(ally, rawDmg, isPiercingLuna, () => {
+            if (currentEnemy.hp <= 0) { setTimeout(() => triggerCirculation(), 800); return; }
+            setTimeout(() => {
+                enemyCounterAttack(() => {
+                    battleViewState = 'idle';
+                    bActions.classList.remove('hidden');
+                });
+            }, 900);
+        });
+        return;
+    }
+
+    // ゾン専用スキル演出(名前一致時のみ。ダメージ計算式・MP消費・スキル効果自体は変更しない。
+    // アステア・ルーナ・ゾン以外は以下の従来処理をそのまま使う)
+    if (ally.name === ZON_NAME) {
+        const isPiercingZon = (ally.style === GameState.avatar.style || ally.style === currentEnemy.style);
+        playZonSkillSequence(ally, rawDmg, isPiercingZon, () => {
+            if (currentEnemy.hp <= 0) { setTimeout(() => triggerCirculation(), 800); return; }
+            setTimeout(() => {
+                enemyCounterAttack(() => {
+                    battleViewState = 'idle';
+                    bActions.classList.remove('hidden');
+                });
+            }, 900);
+        });
+        return;
+    }
+
     if (ally.sprite) { ally.sprite.setAction('attack'); setTimeout(() => ally.sprite.setAction('idle'), 400); }
     if (ally.job === '染色術師') { playSound('magic'); spawnMagicParticles(200, 300, 600, 380, '#e85bb5'); screenShakeTimer = Math.max(screenShakeTimer, 14); }
     else if (ally.job === '採寸弓師') { playSound('slash'); }
@@ -1578,12 +3390,13 @@ function commandAllyAttack(ally) {
     updateHPUI();
     if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 6, flashFrames: 16, knockbackPower: 8, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
 
+    const elemLabel = getElementMultiplier(ally.style, currentEnemy.style) > 1 ? '(効果は抜群だ！)' : (getElementMultiplier(ally.style, currentEnemy.style) < 1 ? '(効果はいまひとつ…)' : '');
     if (blocked) {
         showDamage(600, 360, 0);
         bMsg.textContent = `🛡️ ${ally.name}の攻撃は障壁に阻まれた！ スキルか属性連携で破れ！`;
     } else {
         showDamage(600, 360, dmg);
-        bMsg.textContent = isPiercing ? `${ally.name}の属性一致攻撃！ ${dmg}のダメージ！` : `${ally.name}の攻撃！ ${dmg}のダメージ！`;
+        bMsg.textContent = (isPiercing ? `${ally.name}の属性一致攻撃！ ${dmg}のダメージ！` : `${ally.name}の攻撃！ ${dmg}のダメージ！`) + elemLabel;
     }
 
     if (currentEnemy.hp <= 0) { setTimeout(() => triggerCirculation(), 800); return; }
@@ -1600,6 +3413,7 @@ document.getElementById('btn-ally').addEventListener('click', openAllySelect);
 
 document.getElementById('btn-skill').addEventListener('click', () => {
     if (battleViewState !== 'idle' || !currentEnemy) return;
+    if (activeFighter) { playSound('hit'); bMsg.textContent = `衣装奥義は勇者専用！ 交代中は使えない…`; return; } // 仲間と交代中は勇者専用の奥義は使えない
     if (GameState.avatar.mp < 10) { playSound('hit'); bMsg.textContent = `MP不足！`; return; }
     GameState.avatar.mp -= 10; updateHeroHUD();
 
@@ -1613,9 +3427,36 @@ document.getElementById('btn-skill').addEventListener('click', () => {
         executeAttack(1.8, '衣装奥義・シームブレイク', true);
     }, 650);
 });
-document.getElementById('btn-item').addEventListener('click', () => { playSound('select'); executeAttack(0.8, '秘薬の一撃', false); });
+// アイテム(回復): 所持している回復薬を実際に消費してHP・MPを回復する(攻撃はしない)
+document.getElementById('btn-item').addEventListener('click', () => {
+    if (battleViewState !== 'idle' || !currentEnemy) return;
+    if (!GameState.items || (GameState.items.potion || 0) <= 0) {
+        playSound('hit');
+        bMsg.textContent = `回復薬を持っていない…`;
+        return;
+    }
+    playSound('select');
+    battleViewState = 'attacking'; bActions.classList.add('hidden');
+    GameState.items.potion--;
+    const healAmount = Math.max(1, Math.round((GameState.avatar.maxHp || 100) * 0.5));
+    const mpHealAmount = Math.max(1, Math.round((GameState.avatar.maxMp || 50) * 0.5));
+    GameState.avatar.hp = Math.min(GameState.avatar.maxHp || 100, GameState.avatar.hp + healAmount);
+    GameState.avatar.mp = Math.min(GameState.avatar.maxMp || 50, GameState.avatar.mp + mpHealAmount);
+    updateHeroHUD();
+    playHealFanfare();
+    spawnMagicParticles(200, 400, 200, 220, '#66ffaa');
+    showHeal(200, 380, healAmount);
+    bMsg.textContent = `回復薬を使った！ HPが${healAmount}・MPが${mpHealAmount}回復した！(残り${GameState.items.potion}個)`;
+
+    setTimeout(() => {
+        enemyCounterAttack(() => {
+            battleViewState = 'idle';
+            bActions.classList.remove('hidden');
+        });
+    }, 900);
+});
 document.getElementById('btn-run').addEventListener('click', () => {
-    playSound('select'); battleDlg.classList.add('hidden'); isBattling = false; currentEnemy = null; playFastEpicBGM(false);
+    playSound('select'); battleDlg.classList.add('hidden'); isBattling = false; currentEnemy = null; activeFighter = null; endBattleBGM();
     attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0;
     allySelectPanel.classList.add('hidden'); bActions.classList.remove('hidden');
 });
@@ -1631,6 +3472,14 @@ function triggerCirculation() {
     spawnParticles(600, 380);
     const reward = currentEnemy.goldDrop || 50; updateGold(reward);
 
+    // 勝利のたびに一定確率で回復薬を1個入手する(戦闘中の「アイテム(回復)」で実際に使える)
+    const gotPotion = Math.random() < 0.3;
+    if (gotPotion) { GameState.items.potion = (GameState.items.potion || 0) + 1; updateItemButtonLabel(); }
+
+    // 泡織りの洗濯広場: 敵の種類を問わず、勝利のたびに通算勝利数を1つ加算する(洗剤の泡の復活条件に使う)
+    GameState.worldProgress.laundry.totalWins++;
+    saveWorldProgress();
+
     // フィールド拡張: フィールド固有ボス以外の撃破だけをボスゲート討伐数に加算する
     if (currentEnemy && !currentEnemy.isFieldBoss) {
         const fid = GameState.currentFieldId;
@@ -1638,7 +3487,7 @@ function triggerCirculation() {
         saveWorldProgress();
     }
 
-    setTimeout(() => { bMsg.textContent = `敵の魂がGへと変換された！ (獲得: ${reward} G)`; playSound('crystal'); }, 1500);
+    setTimeout(() => { bMsg.textContent = `敵の魂がGへと変換された！ (獲得: ${reward} G)${gotPotion ? ' 💊回復薬を1個手に入れた！' : ''}`; playSound('crystal'); }, 1500);
 
     setTimeout(() => {
         battleDlg.classList.add('hidden');
@@ -1657,8 +3506,8 @@ function triggerCirculation() {
                 dialogText.textContent = `💰 敵の魂がGに変換された！ (+${bonus} G)`;
                 setTimeout(() => { dialogText.textContent = prevText; }, 3000);
             }
-            currentEnemy = null; isBattling = false; battleViewState = 'idle';
-            playFastEpicBGM(false);
+            currentEnemy = null; isBattling = false; battleViewState = 'idle'; activeFighter = null;
+            endBattleBGM();
         }
     }, 4000);
 }
@@ -1728,8 +3577,8 @@ function drawFashionShow() {
             dialogText.textContent = unlockMsg || `💰 凱旋の儀が終わり、ボスの魂がGに変換された！ (+${bonus} G)`;
             setTimeout(() => { dialogText.textContent = prevText; }, 4000);
         }
-        currentEnemy = null; isBattling = false; battleViewState = 'idle';
-        playFastEpicBGM(false);
+        currentEnemy = null; isBattling = false; battleViewState = 'idle'; activeFighter = null;
+        endBattleBGM();
     }
 }
 
@@ -1788,7 +3637,7 @@ function receiveClothingReview(review) {
     listing.status = 'reviewed';
     listing.review = review;
     updateListingUI();
-    showLegacyReview(listing);
+    if (!isInLaundryPlaza) showLegacyReview(listing); // 広場滞在中は通知を表示しない(状態はここで保存済みなので後で確認できる)
     return true;
 }
 

@@ -47,7 +47,10 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 #listing-status { margin-bottom:8px; color:#d9ccff; font-size:14px; }
 .party-member-row { display:flex; align-items:center; gap:10px; min-height:54px; margin:5px 0; padding:3px 7px; border-left:3px solid currentColor; background:rgba(255,255,255,.04); }
 .party-member-row small { display:block; font-size:12px; opacity:.86; }
+.party-member-row.is-knocked-out { opacity:.45; filter:grayscale(70%); }
 .party-sprite { display:inline-block; width:48px; height:48px; flex:0 0 48px; background-image:var(--ally-sprite); background-size:1200% 400%; background-position:0 0; background-repeat:no-repeat; image-rendering:pixelated; }
+/* アステア専用ポートレート(party_special_actions.png 1536x1024, 6列×3行)の先頭コマだけを表示する */
+.is-asteria-portrait { background-size:600% 300% !important; background-position:0 0 !important; }
 .role-mage { color:#ff65d5; } .role-archer { color:#e9e33d; } .role-warrior { color:#ff7143; }
 
 /* Battle Elements */
@@ -68,6 +71,50 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .hud-num { color: #ddd; min-width: 28px; text-align: left; }
 .battle-commands { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
 .cmd-btn { text-align: left; padding-left: 20px; }
+
+/* ==========================================
+   戦闘画面レイアウト整理 (#battle-dialog のみに限定。#shop-screen 等の
+   .battle-commands 使用箇所やダメージ計算・敵AI・戦闘処理には影響しない)
+   HUD・敵名・敵HPは上部、メッセージ+コマンドは下部へ固定し、
+   中央のキャラクター表示領域(主人公・仲間・敵・エフェクト)を広く確保する
+   ========================================== */
+#battle-dialog {
+  top: 0; bottom: 0; left: 0; right: 0; width: 100%; height: 100%;
+  transform: none; background: none; border: none; box-shadow: none; padding: 0;
+  pointer-events: none;
+}
+#battle-dialog #battle-hud {
+  position: absolute; top: 76px; left: 50%; transform: translateX(-50%);
+  margin-bottom: 0; padding: 4px 10px; background: rgba(3,8,31,.85); border: 2px solid #6fb8e0; border-radius: 3px;
+}
+#battle-dialog #battle-monster-name {
+  position: absolute; top: 106px; left: 50%; transform: translateX(-50%);
+  width: 92%; margin-bottom: 0; font-size: 15px; line-height: 1.3;
+}
+#battle-dialog .enemy-hp-container {
+  position: absolute; top: 144px; left: 50%; transform: translateX(-50%);
+  margin-bottom: 0;
+}
+#battle-dialog #battle-msg {
+  position: absolute; left: 5%; right: 5%; bottom: 124px;
+  margin: 0; font-size: 14px; line-height: 1.3; max-height: 54px; overflow: hidden;
+  pointer-events: none; text-shadow: 2px 2px #000, 0 0 6px #000;
+}
+#battle-dialog #battle-actions, #battle-dialog #ally-select-panel {
+  position: absolute; left: 12px; right: 12px; bottom: 8px; margin-top: 0;
+  max-height: 112px; overflow-y: auto; pointer-events: auto;
+  display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; padding: 6px;
+  background: rgba(3,8,31,.92); border: 3px solid #eef8ff; border-radius: 3px; box-shadow: 0 0 0 3px #168dc0;
+}
+#battle-dialog #battle-actions button, #battle-dialog #ally-select-panel button {
+  padding: 4px 6px; font-size: 11px; line-height: 1.2; white-space: normal; text-align: center;
+}
+@media (max-width: 850px) {
+  #battle-dialog #battle-actions, #battle-dialog #ally-select-panel {
+    grid-template-columns: repeat(2, minmax(0,1fr)); max-height: 160px;
+  }
+  #battle-dialog #battle-msg { bottom: 168px; }
+}
 .hidden { display: none !important; }
 
 /* Buttons */
@@ -252,6 +299,15 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
   #virtual-dpad { opacity: 0.8; }
 }
 
+/* 戦闘中・メニュー(ステータス)・召喚(時環観測室)の間は仮想十字キーを完全に隠す。
+   HTMLは削除せず display だけを切り替える。フィールドに戻ると自動的に再表示される。
+   移動処理・キー入力・戦闘コマンド自体は変更しない。 */
+#ui-overlay:has(#battle-dialog:not(.hidden)) #virtual-dpad,
+#ui-overlay:has(#status-menu:not(.hidden)) #virtual-dpad,
+#ui-overlay:has(#shop-screen:not(.hidden)) #virtual-dpad {
+  display: none !important;
+}
+
 .dpad-btn {
   position: absolute;
   width: 50px;
@@ -314,4 +370,7 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .ending-content { width: 85%; }
 .notification-box { background: rgba(0,255,0,0.1); padding: 20px; margin: 20px 0; border: 2px dashed #5f5; color: #5f5; }
 .flash-title { color: #ffaa00; animation: p-flash 1s infinite alternate; }
+.gameover-title { color: #ff3b3b; animation: gameover-flash 1s infinite alternate; }
+@keyframes gameover-flash { 0% { text-shadow: 0 0 5px #ff3b3b; } 100% { text-shadow: 0 0 20px #fff, 0 0 30px #ff3b3b; } }
+.recovery-box { background: rgba(0,200,255,0.1); padding: 20px; margin: 20px 0; border: 2px dashed #5cf; color: #bfeeff; }
 @keyframes p-flash { 0% { text-shadow: 0 0 5px #ffaa00; } 100% { text-shadow: 0 0 20px #fff, 0 0 30px #ffaa00; } }

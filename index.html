@@ -145,6 +145,11 @@
           <div class="status-content">
             <p>宿した遺物: <span id="menu-avatar-name">------</span></p>
             <p style="color:#f1c40f;">所持金: <span id="menu-gold">0</span> G</p>
+            <hr>
+            <h3>🧵 仕立工房</h3>
+            <p style="font-size:13px; color:#d9ccff;">強化したい仲間を選んでGで1レベル上げられます（攻撃力・HPが上がります／費用は現在Lvにより変動）</p>
+            <ul id="tailor-list"></ul>
+            <hr>
             <div class="listing-panel">
               <p id="listing-status">出品状況：未出品</p>
               <button id="btn-list-clothing" class="retro-btn small-btn">現在の服を出品する</button>
@@ -152,10 +157,6 @@
             <hr>
             <h3>【仲間になった魔物＆召喚した魂】</h3>
             <ul id="party-list"></ul>
-            <hr>
-            <h3>🧵 仕立工房</h3>
-            <p style="font-size:13px; color:#d9ccff;">Gで仲間を1レベル上げられます（費用は現在Lvにより変動）</p>
-            <ul id="tailor-list"></ul>
           </div>
           <button id="btn-close-menu" class="retro-btn">閉じる [Esc]</button>
         </div>
@@ -211,6 +212,26 @@
         </div>
         <p id="ending-text"></p>
         <button id="btn-restart" class="retro-btn">新たな遺物を捧げる</button>
+      </div>
+    </div>
+
+    <!-- ゲームオーバー画面: 勇者が戦闘不能になった時だけ表示する -->
+    <div id="gameover-screen" class="screen hidden">
+      <div class="ending-content panel-16bit">
+        <h1 class="gameover-title">💀 GAME OVER 💀</h1>
+        <p id="gameover-text">勇者は力尽きた…意識が遠のいていく…</p>
+      </div>
+    </div>
+
+    <!-- 回復の間: ゲームオーバー後に全回復し、いつでも元のフィールドへ戻れる -->
+    <div id="recovery-screen" class="screen hidden">
+      <div class="ending-content panel-16bit">
+        <h2>✨ 回復の間 ✨</h2>
+        <div class="recovery-box">
+          <p>静かな光に包まれ、傷が癒えていく…</p>
+          <p id="recovery-text">勇者と仲間の体力・魔力は全回復した。</p>
+        </div>
+        <button id="btn-recovery-return" class="retro-btn">元のフィールドへ戻る</button>
       </div>
     </div>
 

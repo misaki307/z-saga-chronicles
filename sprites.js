@@ -171,6 +171,10 @@ class SpriteAnimator {
         this.knockback.y += this.knockback.vy;
         this.knockback.vx *= this.knockback.decay;
         this.knockback.vy *= this.knockback.decay;
+        // 変位そのものも毎フレーム減衰させ、元の立ち位置へばねのように戻す
+        // (速度だけ減衰させると変位が戻らず、連続ヒットで画面外まで吹き飛んでしまうため)
+        this.knockback.x *= this.knockback.decay;
+        this.knockback.y *= this.knockback.decay;
 
         const a = this.actions[this.action];
         if (!a) return;
