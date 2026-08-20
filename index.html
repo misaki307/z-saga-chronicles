@@ -145,6 +145,7 @@
           <div class="status-content">
             <p>宿した遺物: <span id="menu-avatar-name">------</span></p>
             <p style="color:#f1c40f;">所持金: <span id="menu-gold">0</span> G</p>
+            <button id="btn-open-party-formation" class="retro-btn small-btn" style="margin:6px 0;">🧣 パーティー編成</button>
             <hr>
             <h3>🧵 仕立工房</h3>
             <p style="font-size:13px; color:#d9ccff;">強化したい仲間を選んでGで1レベル上げられます（攻撃力・HPが上がります／費用は現在Lvにより変動）</p>
@@ -159,6 +160,58 @@
             <ul id="party-list"></ul>
           </div>
           <button id="btn-close-menu" class="retro-btn">閉じる [Esc]</button>
+        </div>
+
+        <!-- パーティー編成画面 -->
+        <div id="party-formation-screen" class="dialog panel-16bit hidden">
+          <div class="pf-header">
+            <h2 class="pf-title">🧣 パーティー編成</h2>
+            <button id="btn-close-party-formation" class="retro-btn small-btn">閉じる [Esc]</button>
+          </div>
+          <div class="pf-slots-label">⚔️ 冒険メンバー　<span id="pf-slot-count">0/4</span></div>
+          <div class="pf-slots" id="pf-slots"></div>
+          <div class="pf-body">
+            <div class="pf-roster-col">
+              <div class="pf-filters">
+                <div class="pf-filter-row">
+                  <span class="pf-filter-label">ランク</span>
+                  <div class="pf-filter-group" id="pf-rank-filter">
+                    <button class="pf-filter-btn active" data-value="ALL">ALL</button>
+                    <button class="pf-filter-btn" data-value="SSS">SSS</button>
+                    <button class="pf-filter-btn" data-value="SS">SS</button>
+                    <button class="pf-filter-btn" data-value="S">S</button>
+                    <button class="pf-filter-btn" data-value="A">A</button>
+                    <button class="pf-filter-btn" data-value="B">B</button>
+                    <button class="pf-filter-btn" data-value="C">C</button>
+                  </div>
+                </div>
+                <div class="pf-filter-row">
+                  <span class="pf-filter-label">属性</span>
+                  <div class="pf-filter-group" id="pf-style-filter">
+                    <button class="pf-filter-btn active" data-value="ALL">ALL</button>
+                    <button class="pf-filter-btn" data-value="炎">炎</button>
+                    <button class="pf-filter-btn" data-value="氷">氷</button>
+                    <button class="pf-filter-btn" data-value="雷">雷</button>
+                    <button class="pf-filter-btn" data-value="光">光</button>
+                    <button class="pf-filter-btn" data-value="闇">闇</button>
+                  </div>
+                </div>
+                <div class="pf-filter-row">
+                  <span class="pf-filter-label">並び順</span>
+                  <div class="pf-filter-group" id="pf-sort-group">
+                    <button class="pf-filter-btn active" data-value="rank">ランク順</button>
+                    <button class="pf-filter-btn" data-value="level">レベル順</button>
+                    <button class="pf-filter-btn" data-value="name">名前順</button>
+                  </div>
+                </div>
+              </div>
+              <div class="pf-roster-label">🧵 仲間一覧</div>
+              <div class="pf-roster-grid" id="pf-roster-grid"></div>
+            </div>
+            <div class="pf-detail-col" id="pf-detail-col">
+              <div class="pf-detail-empty">キャラをタップすると詳細を確認できます</div>
+            </div>
+          </div>
         </div>
 
         <!-- 時環観測室（召喚） -->

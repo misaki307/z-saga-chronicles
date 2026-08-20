@@ -631,7 +631,8 @@ function playRankSummonBGM(rankKey) {
 // ==========================================
 const GameState = {
     avatar: { name: '', job: '', style: '', color: '#fff', hp: 100, maxHp: 100, mp: 50, maxMp: 50, agi: 30, tension: 0 },
-    party: [], // {name, job, style, color, isDragon, originItem}
+    party: [], // {name, job, style, color, isDragon, originItem} 所持している仲間全員(フィールド追従とは別)
+    activePartyIds: [], // フィールド・戦闘へ実際に同行させる仲間のキー(最大4人、パーティー編成画面で選ぶ)
     listing: null, // {id, itemName, status:'listed'|'reviewed'|'completed', rewardClaimed}
     continents: ['封印の塔', 'カジュアル平原', '深淵の森', '荒野の砂漠', '古の山脈', 'アズライト中央大陸'],
     globalTime: 0,
@@ -1763,9 +1764,81 @@ function addOrEnhancePartyMember(candidate) {
     candidate.skillLevel = 1;
     candidate.maxHp = getAllyMaxHp(candidate);
     candidate.hp = candidate.maxHp;
+    candidate.isNew = true; // 初獲得のみ立てる。パーティー編成画面でキャラ詳細を開いたら既読(false)にする
     GameState.party.push(candidate);
     savePartyData();
+    // 新規獲得キャラは仲間一覧へ追加するだけで、既存の冒険メンバー(activePartyIds)は変更しない。
+    // ただし冒険メンバーが1人もいない(=初めての所持キャラ)場合だけは、誰もついてこない状態を防ぐため
+    // この1人だけを冒険メンバーにする(既存の編成を勝手に変えることにはならない)。
+    if (GameState.activePartyIds.length === 0) setActiveParty([getMemberKey(candidate)]);
+    if (isPartyFormationOpen) renderPartyFormationScreen(); // 編成画面を開いたまま召喚した場合も一覧を再描画する
     return { merged: false, member: candidate };
+}
+
+// ==========================================
+// 冒険メンバー(フィールド・戦闘へ実際に同行する最大4人)。
+// GameState.party(所持キャラ全員)とは別に、キャラのキー配列(activePartyIds)だけを保持する。
+// characterIdが無い旧仲間(魔物・旧セーブ)も一意に指せるよう、フォールバックのキーを使う。
+// ==========================================
+function getMemberKey(p) {
+    if (!p) return null;
+    if (p.characterId) return p.characterId;
+    if (p.job === '魔物' && p.enemyTypeKey) return `monster:${p.enemyTypeKey}`;
+    return `legacy:${p.name}`;
+}
+
+// 現在の冒険メンバーを、activePartyIdsの並び順のまま(先頭=リーダー)最大4人返す
+function getActiveParty() {
+    const byKey = new Map(GameState.party.map(p => [getMemberKey(p), p]));
+    const result = [];
+    GameState.activePartyIds.forEach(id => {
+        const p = byKey.get(id);
+        if (p && !result.includes(p)) result.push(p);
+    });
+    return result.slice(0, 4);
+}
+
+const ACTIVE_PARTY_KEY = 'zsaga_active_party_v1';
+function saveActivePartyIds() {
+    try { localStorage.setItem(ACTIVE_PARTY_KEY, JSON.stringify(GameState.activePartyIds)); } catch (e) { /* 保存できない環境では無視 */ }
+}
+// 存在しないID・未所持ID・重複IDを除外し、最大4人までに正規化する。保存済みactivePartyIdsが無い場合だけ、
+// 所持キャラの先頭4人(重複なし)を初期パーティーにする(既存の所持状況・Lv・重複強化は一切変更しない)。
+function loadActivePartyIds() {
+    const ownedKeys = GameState.party.map(getMemberKey);
+    let ids = [];
+    try {
+        const raw = localStorage.getItem(ACTIVE_PARTY_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) ids = parsed;
+        }
+    } catch (e) { /* 壊れた保存データは無視 */ }
+    const seen = new Set();
+    let sanitized = ids.filter(id => {
+        if (typeof id !== 'string' || seen.has(id) || !ownedKeys.includes(id)) return false;
+        seen.add(id); return true;
+    }).slice(0, 4);
+    if (sanitized.length === 0 && ownedKeys.length > 0) {
+        // 既存セーブにactivePartyIdsが無い(または全員無効)場合だけ、先頭4人を初期パーティーにする
+        const seenInit = new Set();
+        sanitized = ownedKeys.filter(k => { if (seenInit.has(k)) return false; seenInit.add(k); return true; }).slice(0, 4);
+    }
+    GameState.activePartyIds = sanitized;
+    saveActivePartyIds();
+}
+// パーティー編成画面から呼ぶ。最大4人・重複なし・未所持除外を保証してから保存し、フィールド追従を即時更新する。
+function setActiveParty(ids) {
+    const ownedKeys = GameState.party.map(getMemberKey);
+    const seen = new Set();
+    const sanitized = ids.filter(id => {
+        if (seen.has(id) || !ownedKeys.includes(id)) return false;
+        seen.add(id); return true;
+    }).slice(0, 4);
+    if (sanitized.length === 0) return false; // パーティーが0人になる操作は無効
+    GameState.activePartyIds = sanitized;
+    saveActivePartyIds();
+    return true;
 }
 
 // 仲間の攻撃力にLv強化分の補正(攻撃補正% + スキルLvに応じた上乗せ)を掛ける
@@ -2419,7 +2492,7 @@ function updateGame() {
         GameState.avatar.sprite.setDirection(player.vx, player.vy);
         GameState.avatar.sprite.setAction(isMoving ? (hasTrendBuff ? 'run' : 'walk') : 'idle');
     }
-    GameState.party.forEach(p => {
+    getActiveParty().forEach(p => {
         if (!p.sprite) return;
         p.sprite.setDirection(player.vx, player.vy);
         p.sprite.setAction(isMoving ? 'walk' : 'idle');
@@ -2541,7 +2614,7 @@ function drawBattleArena(ctxObj) {
 
 function updateAllSprites() {
     if (GameState.avatar.sprite) GameState.avatar.sprite.update();
-    GameState.party.forEach(p => { if (p.sprite) p.sprite.update(); });
+    getActiveParty().forEach(p => { if (p.sprite) p.sprite.update(); });
     if (currentEnemy && currentEnemy.sprite) currentEnemy.sprite.update();
     if (fsBoss && fsBoss.sprite) fsBoss.sprite.update();
 }
@@ -2566,7 +2639,7 @@ function drawGame() {
         const RANK_SIZE = 3;
         const RANK_GAP = 16; // ランクごとの追従遅延(historyLogのステップ数)
         const SLOT_OFFSET = [-16, 16, 0]; // ランク内の並び順(左・右・中央)
-        GameState.party.forEach((follower, idx) => {
+        getActiveParty().forEach((follower, idx) => {
             const rank = Math.floor(idx / RANK_SIZE);
             const slot = idx % RANK_SIZE;
             const delay = (rank + 1) * RANK_GAP;
@@ -2582,7 +2655,8 @@ function drawGame() {
         drawBossGateIndicator(ctx);
     } else if (isBattling && currentEnemy) {
         // 交代中は前衛(activeFighter)を後衛グリッドから外し、代わりにベンチの勇者をそこに並べる
-        const benchList = activeFighter ? [GameState.avatar, ...GameState.party.filter(p => p !== activeFighter)] : GameState.party;
+        const activeParty = getActiveParty();
+        const benchList = activeFighter ? [GameState.avatar, ...activeParty.filter(p => p !== activeFighter)] : activeParty;
         benchList.forEach((follower, i) => {
             let px = 100 - (Math.floor(i / 3) * 30), py = 300 + ((i % 3) * 60);
             drawFollowerSprite(follower, px, py, 0.9, true);
@@ -2879,10 +2953,10 @@ window.addEventListener('keydown', e => {
     if (!gameLoopId) return;
     if (!isMenuOpen && !isShopOpen && !isFashionShow && !isGameOver) keys[e.key] = true;
     if (isGameOver) return; // ゲームオーバー・回復の間ではメニュー等のショートカットも無効にする
-    if ((e.key === 'm' || e.key === 'M') && !isShopOpen) toggleMenu();
+    if ((e.key === 'm' || e.key === 'M') && !isShopOpen && !isPartyFormationOpen) toggleMenu();
     if (e.key === 'g' || e.key === 'G') openShopDirect();
     if (e.key === 'f' || e.key === 'F') openFieldTravel();
-    if (e.key === 'Escape' && isMenuOpen) toggleMenu();
+    if (e.key === 'Escape') { if (isPartyFormationOpen) closePartyFormation(); else if (isMenuOpen) toggleMenu(); }
 }); window.addEventListener('keyup', e => { keys[e.key] = false; });
 
 document.getElementById('clothing-upload').addEventListener('change', async (e) => {
@@ -2902,6 +2976,7 @@ function startGame() {
     updateFieldDialogText();
     playFastEpicBGM(false); player.x = 190; player.y = 190; historyLog.length = 0; GameState.party = []; updateGold(0);
     loadPartyData(); // 保存済みの仲間(characterId・portraitPath・Lv等)があれば復元する
+    loadActivePartyIds(); // 保存済みの冒険メンバー(最大4人)を復元する。無ければ所持キャラの先頭4人を初期値にする
     GameState.avatar.sprite = new SpriteAnimator('hero', GameState.avatar.job);
     currentTrend = ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)]; // Init trend
     FieldAmbientAnimation.start('azurlight');
@@ -3152,7 +3227,7 @@ const ENEMY_SPECIAL_NAMES = { mid: '服飾呪縛', boss: '百鬼衣装絶' };
 
 // 反撃の対象をランダムに1体選ぶ({type:'hero'} または {type:'ally', ally})
 function pickCounterTarget() {
-    const livingAllies = GameState.party.filter(p => typeof p.hp !== 'number' || p.hp > 0);
+    const livingAllies = getActiveParty().filter(p => typeof p.hp !== 'number' || p.hp > 0);
     if (activeFighter) {
         // 交代中: 矢面に立つ仲間を勇者の代わりに抽選プールへ入れ、ベンチの勇者は他の仲間と同列で混ぜる
         const benchAllies = livingAllies.filter(a => a !== activeFighter);
@@ -3232,7 +3307,7 @@ let isGameOver = false;
 
 // 仲間が1人以上いて、かつ全員が戦闘不能(HP0)かどうか。仲間がいない場合はfalse(全滅とはみなさない)。
 function isPartyWiped() {
-    const trackedAllies = GameState.party.filter(p => typeof p.hp === 'number');
+    const trackedAllies = getActiveParty().filter(p => typeof p.hp === 'number');
     if (trackedAllies.length === 0) return false;
     return trackedAllies.every(p => p.hp <= 0);
 }
@@ -3341,7 +3416,7 @@ function executeAttack(damageMulti = 1, attackTypeStr = '攻撃', isPiercing = f
     if (attacker.sprite) attacker.sprite.setAction('attack'); // 攻撃中は移動を制限(既にbattleViewStateで制限済み)
 
     // Check Perfect Fit Connect(主戦力と同じ仲間は連携に含めない)
-    let perfectFitAllies = GameState.party.filter(p => p !== activeFighter && (p.style === attacker.style || p.style === currentEnemy.style) && (typeof p.hp !== 'number' || p.hp > 0));
+    let perfectFitAllies = getActiveParty().filter(p => p !== activeFighter && (p.style === attacker.style || p.style === currentEnemy.style) && (typeof p.hp !== 'number' || p.hp > 0));
 
     let rawDmg;
     if (activeFighter) {
@@ -3423,7 +3498,8 @@ function perfectFitPhase(allies) {
 
 function coOpPhase() {
     if (!currentEnemy || currentEnemy.hp <= 0) return;
-    if (GameState.party.length === 0) {
+    const coOpParty = getActiveParty();
+    if (coOpParty.length === 0) {
         bMsg.textContent = `【${currentEnemy.name}】は渋っている...`;
         enemyCounterAttack(() => { battleViewState = 'idle'; bActions.classList.remove('hidden'); });
         return;
@@ -3433,7 +3509,7 @@ function coOpPhase() {
     let anyBlocked = false;
 
     function attackAlly(index) {
-        if (!currentEnemy || currentEnemy.hp <= 0 || index >= GameState.party.length) {
+        if (!currentEnemy || currentEnemy.hp <= 0 || index >= coOpParty.length) {
             setTimeout(() => {
                 if (currentEnemy && currentEnemy.hp <= 0) triggerCirculation();
                 else if (currentEnemy) {
@@ -3449,7 +3525,7 @@ function coOpPhase() {
             }, 600);
             return;
         }
-        let ally = GameState.party[index];
+        let ally = coOpParty[index];
         if (typeof ally.hp === 'number' && ally.hp <= 0) { attackAlly(index + 1); return; } // 戦闘不能の仲間は追撃に参加しない
         if (ally === activeFighter) { attackAlly(index + 1); return; } // 交代中の主戦力は既に自分の攻撃を終えているので追撃には参加しない
         let base = getAllyAttackBase(ally, 'coop');
@@ -3484,9 +3560,10 @@ const allySelectPanel = document.getElementById('ally-select-panel');
 
 function openAllySelect() {
     if (battleViewState !== 'idle' || !currentEnemy) return;
-    if (GameState.party.length === 0 && !activeFighter) { bMsg.textContent = `一緒に戦う仲間がいない…`; return; }
+    const activePartyForSelect = getActiveParty();
+    if (activePartyForSelect.length === 0 && !activeFighter) { bMsg.textContent = `一緒に戦う仲間がいない…`; return; }
     // 戦闘不能(HP0)の仲間は選択できない(総追撃からも別途除外する)
-    const availableAllies = GameState.party.filter(a => typeof a.hp !== 'number' || a.hp > 0);
+    const availableAllies = activePartyForSelect.filter(a => typeof a.hp !== 'number' || a.hp > 0);
     if (availableAllies.length === 0 && !activeFighter) { bMsg.textContent = `仲間は全員戦闘不能で動けない…`; return; }
     playSound('select');
     bActions.classList.add('hidden');
@@ -3954,3 +4031,245 @@ Object.keys(dpadBtnMap).forEach(id => {
         }, {passive: false});
     }
 });
+
+// ==========================================
+// パーティー編成画面
+// フィールド・戦闘へ実際に同行する仲間(最大4人)を、所持キャラ全員(GameState.party)の中から選ぶUI。
+// 見た目は既存の紺色HUD・シアン二重枠・金色アクセントに合わせ、文字は全てbodyの既存ドットフォント(DotGothic16)を
+// そのまま継承する(新規フォント読込・画像化テキストなし)。
+// ==========================================
+let isPartyFormationOpen = false;
+let pfSelectedKey = null; // 現在detail欄に表示中のキャラのキー(getMemberKeyの戻り値)
+let pfSwapPendingKey = null; // 4人編成済みの状態で新しいキャラを追加しようとした時、交換先の枠選択待ちのキー
+let pfRankFilter = 'ALL';
+let pfStyleFilter = 'ALL';
+let pfSortMode = 'rank';
+const PF_RANK_ORDER = RARITY_TABLE.map(r => r.key); // ['SSS','SS','S','A','B','C'] (既存のガチャ確率テーブルの並びをそのまま使う)
+
+// characterIdから、表示専用の役職・武器を仕入れる(CHARACTER_ROSTERは表示専用の参照元。既存の所持データ自体は書き換えない)
+function getPfCharacterRef(p) {
+    const def = p.characterId ? CHARACTER_ROSTER.find(c => c.id === p.characterId) : null;
+    return { job: (def && def.job) || p.job || '', weapon: def ? def.weapon : null };
+}
+
+// パーティー編成の対象となる所持キャラ一覧(魔物の仲間は現状この画面の表示モデル対象外。既存データは変更しない)
+function getPfRosterMembers() {
+    return GameState.party.filter(p => p.job !== '魔物');
+}
+
+function openPartyFormation() {
+    if (isBattling || isShopOpen || isFashionShow) return;
+    playSound('select');
+    document.getElementById('status-menu').classList.add('hidden');
+    document.getElementById('party-formation-screen').classList.remove('hidden');
+    isPartyFormationOpen = true;
+    pfSelectedKey = null;
+    pfSwapPendingKey = null;
+    renderPartyFormationScreen();
+}
+function closePartyFormation() {
+    playSound('select');
+    document.getElementById('party-formation-screen').classList.add('hidden');
+    isPartyFormationOpen = false;
+    if (isMenuOpen) document.getElementById('status-menu').classList.remove('hidden');
+}
+document.getElementById('btn-open-party-formation').addEventListener('click', openPartyFormation);
+document.getElementById('btn-close-party-formation').addEventListener('click', closePartyFormation);
+
+function renderPartyFormationScreen() {
+    renderPfSlots();
+    renderPfRoster();
+    renderPfDetail();
+}
+
+function pfPortraitBg(p) {
+    if (!p || !p.portraitPath) return '';
+    return `background-image:url('${p.portraitPath}'); background-size:contain; background-position:center;`;
+}
+
+function renderPfSlots() {
+    const wrap = document.getElementById('pf-slots');
+    const activeParty = getActiveParty();
+    document.getElementById('pf-slot-count').textContent = `${activeParty.length}/4`;
+    wrap.innerHTML = '';
+    for (let i = 0; i < 4; i++) {
+        const member = activeParty[i];
+        const slot = document.createElement('div');
+        const key = member ? getMemberKey(member) : null;
+        slot.className = 'pf-slot' + (member ? ' filled' : '') + (i === 0 && member ? ' is-leader' : '') + (key && key === pfSelectedKey ? ' is-selected' : '');
+        if (member) {
+            const isAsteria = member.name === ASTERIA_NAME;
+            const portraitStyle = isAsteria ? '' : pfPortraitBg(member);
+            slot.innerHTML = `
+              <span class="pf-slot-num">${i + 1}</span>
+              ${i === 0 ? '<span class="pf-slot-leader-badge">👑リーダー</span>' : ''}
+              ${member.rarity ? `<span class="pf-slot-rank-badge">${member.rarity}</span>` : ''}
+              <div class="pf-slot-portrait" style="${portraitStyle}"></div>
+              <div class="pf-slot-name">${member.name}</div>`;
+            slot.addEventListener('click', () => {
+                pfSelectedKey = key;
+                pfSwapPendingKey = null;
+                renderPfSlots(); renderPfRoster(); renderPfDetail();
+            });
+        } else {
+            slot.innerHTML = `<span class="pf-slot-num">${i + 1}</span><div class="pf-slot-empty-label">＋<br>仲間を選ぶ</div>`;
+            slot.addEventListener('click', () => {
+                if (pfSelectedKey && !getActiveParty().some(m => getMemberKey(m) === pfSelectedKey)) {
+                    pfFormMember(pfSelectedKey);
+                }
+            });
+        }
+        wrap.appendChild(slot);
+    }
+}
+
+function renderPfRoster() {
+    const grid = document.getElementById('pf-roster-grid');
+    const activeKeys = getActiveParty().map(getMemberKey);
+    let members = getPfRosterMembers();
+    if (pfRankFilter !== 'ALL') members = members.filter(p => p.rarity === pfRankFilter);
+    if (pfStyleFilter !== 'ALL') members = members.filter(p => p.style === pfStyleFilter);
+    members = members.slice().sort((a, b) => {
+        if (pfSortMode === 'level') return (b.level || 1) - (a.level || 1);
+        if (pfSortMode === 'name') return (a.name || '').localeCompare(b.name || '', 'ja');
+        return PF_RANK_ORDER.indexOf(a.rarity) - PF_RANK_ORDER.indexOf(b.rarity);
+    });
+    grid.innerHTML = '';
+    if (members.length === 0) {
+        grid.innerHTML = '<div class="pf-empty-roster">条件に合う仲間がいません</div>';
+        return;
+    }
+    members.forEach(p => {
+        const key = getMemberKey(p);
+        const isAsteria = p.name === ASTERIA_NAME;
+        const portraitStyle = isAsteria
+            ? `background-image:url('${ASTERIA_PORTRAIT_PATH}'); background-size:600% 300%; background-position:0 0;`
+            : pfPortraitBg(p);
+        const card = document.createElement('div');
+        card.className = `pf-roster-card pf-rarity-${(p.rarity || 'c').toLowerCase()}${key === pfSelectedKey ? ' is-selected' : ''}`;
+        card.innerHTML = `
+          <span class="pf-card-rank">${p.rarity || ''}</span>
+          ${activeKeys.includes(key) ? '<span class="pf-card-check">✓</span>' : ''}
+          ${p.isNew ? '<span class="pf-card-new">NEW</span>' : ''}
+          <div class="pf-card-portrait" style="${portraitStyle}"></div>
+          <div class="pf-card-name">${p.name}</div>`;
+        card.addEventListener('click', () => {
+            pfSelectedKey = key;
+            pfSwapPendingKey = null;
+            if (p.isNew) { p.isNew = false; savePartyData(); } // 詳細を開いたら既読にする
+            renderPfSlots(); renderPfRoster(); renderPfDetail();
+        });
+        grid.appendChild(card);
+    });
+}
+
+function renderPfDetail() {
+    const col = document.getElementById('pf-detail-col');
+    if (!pfSelectedKey) { col.innerHTML = '<div class="pf-detail-empty">キャラをタップすると詳細を確認できます</div>'; return; }
+    const member = GameState.party.find(p => getMemberKey(p) === pfSelectedKey);
+    if (!member) { pfSelectedKey = null; col.innerHTML = '<div class="pf-detail-empty">キャラをタップすると詳細を確認できます</div>'; return; }
+
+    const isAsteria = member.name === ASTERIA_NAME;
+    const portraitStyle = isAsteria
+        ? `background-image:url('${ASTERIA_PORTRAIT_PATH}'); background-size:600% 300%; background-position:0 0;`
+        : pfPortraitBg(member);
+    const styleColor = STYLE_COLORS[member.style] || '#fff';
+    const ref = getPfCharacterRef(member);
+    const hpKnown = typeof member.hp === 'number' && typeof member.maxHp === 'number';
+    const hpPct = hpKnown ? Math.max(0, Math.min(100, (member.hp / member.maxHp) * 100)) : 100;
+    const atk = Math.round(getAllyAttackBase(member, 'select') * getAllyDamageMultiplier(member));
+    const activeParty = getActiveParty();
+    const isActive = activeParty.some(m => getMemberKey(m) === pfSelectedKey);
+
+    let html = `
+      <div class="pf-detail-portrait" style="${portraitStyle}"></div>
+      <div class="pf-detail-rank">${member.rarity || ''}</div>
+      <div class="pf-detail-name">✨${member.name}</div>
+      <div class="pf-detail-row">${ref.job || ''}${ref.weapon ? ` / ${ref.weapon}` : ''}</div>
+      <div class="pf-detail-row"><span style="color:${styleColor};">${member.style || ''}属性</span> ／ Lv.${member.level || 1}</div>`;
+    if (hpKnown) {
+        html += `<div class="pf-detail-row">HP ${Math.max(0, member.hp)}/${member.maxHp}</div>
+          <div class="pf-detail-hpbar-bg"><div class="pf-detail-hpbar-fill" style="width:${hpPct}%; background:${member.hp <= 0 ? '#803030' : (hpPct < 30 ? '#e05a3a' : '#4fd06a')};"></div></div>`;
+    }
+    html += `<div class="pf-detail-row">攻撃力の目安 ${atk}</div>`;
+    if (member.duplicateCount) {
+        html += `<div class="pf-detail-row">継承${member.duplicateCount}回 / 攻撃+${member.atkBonusPct || 0}% / スキルLv${member.skillLevel || 1}</div>`;
+    } else {
+        html += `<div class="pf-detail-row">スキルLv${member.skillLevel || 1}</div>`;
+    }
+
+    html += '<div class="pf-detail-actions">';
+    if (isActive) {
+        const disabled = activeParty.length <= 1 ? 'disabled' : '';
+        html += `<button id="pf-btn-remove" class="retro-btn small-btn" ${disabled}>外す</button>`;
+        if (activeParty.length <= 1) html += `<div class="pf-swap-hint">※最低1人は必要です</div>`;
+    } else if (pfSwapPendingKey === pfSelectedKey) {
+        html += `<div class="pf-swap-hint">交換する枠を選んでください</div><div class="pf-swap-grid">`;
+        activeParty.forEach((m, i) => { html += `<button data-slot="${i}">${i + 1}: ${m.name}</button>`; });
+        html += `</div><button id="pf-btn-cancel-swap" class="retro-btn small-btn">キャンセル</button>`;
+    } else {
+        html += `<button id="pf-btn-form" class="retro-btn small-btn">編成する</button>`;
+    }
+    html += '</div>';
+    col.innerHTML = html;
+
+    const removeBtn = document.getElementById('pf-btn-remove');
+    if (removeBtn) removeBtn.addEventListener('click', () => pfRemoveMember(pfSelectedKey));
+    const formBtn = document.getElementById('pf-btn-form');
+    if (formBtn) formBtn.addEventListener('click', () => pfFormMember(pfSelectedKey));
+    const cancelBtn = document.getElementById('pf-btn-cancel-swap');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { pfSwapPendingKey = null; renderPfDetail(); });
+    col.querySelectorAll('.pf-swap-grid button[data-slot]').forEach(btn => {
+        btn.addEventListener('click', () => pfSwapSlot(parseInt(btn.dataset.slot, 10), pfSwapPendingKey));
+    });
+}
+
+// 空き枠がある場合はそのまま追加、4人編成済みの場合は交換先の枠選択(pfSwapPendingKey)へ切り替える
+function pfFormMember(key) {
+    const current = GameState.activePartyIds.slice();
+    if (current.includes(key)) return;
+    if (current.length >= 4) {
+        pfSwapPendingKey = key;
+        renderPfDetail();
+        return;
+    }
+    current.push(key);
+    setActiveParty(current);
+    playSound('select');
+    pfSwapPendingKey = null;
+    renderPartyFormationScreen();
+}
+function pfRemoveMember(key) {
+    const current = GameState.activePartyIds.filter(id => id !== key);
+    if (current.length === 0) return; // 最低1人は残す
+    setActiveParty(current);
+    playSound('select');
+    renderPartyFormationScreen();
+}
+function pfSwapSlot(slotIndex, newKey) {
+    const current = GameState.activePartyIds.slice();
+    if (slotIndex < 0 || slotIndex >= current.length) return;
+    current[slotIndex] = newKey;
+    setActiveParty(current);
+    playSound('select');
+    pfSwapPendingKey = null;
+    pfSelectedKey = newKey;
+    renderPartyFormationScreen();
+}
+
+// ランク・属性フィルター、並び替えボタンの共通ハンドラ(ボタンの見た目切替+再描画のみ。既存の他機能には影響しない)
+function pfWireFilterGroup(groupId, applyFn) {
+    const group = document.getElementById(groupId);
+    if (!group) return;
+    group.querySelectorAll('.pf-filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            group.querySelectorAll('.pf-filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            applyFn(btn.dataset.value);
+            renderPfRoster();
+        });
+    });
+}
+pfWireFilterGroup('pf-rank-filter', v => { pfRankFilter = v; });
+pfWireFilterGroup('pf-style-filter', v => { pfStyleFilter = v; });
+pfWireFilterGroup('pf-sort-group', v => { pfSortMode = v; });
