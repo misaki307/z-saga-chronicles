@@ -2541,12 +2541,13 @@ function updateGame() {
         GameState.avatar.sprite.setDirection(player.vx, player.vy);
         GameState.avatar.sprite.setAction(isMoving ? (hasTrendBuff ? 'run' : 'walk') : 'idle');
     }
-    // 現在パーティーにいる仲間(リーダー・追従とも、勇者を除く)の歩行アニメーションを更新する
-    getActiveParty().forEach(p => {
-        if (!p.sprite) return;
-        p.sprite.setDirection(player.vx, player.vy);
-        p.sprite.setAction(isMoving ? 'walk' : 'idle');
-    });
+    // フィールドリーダーが仲間の場合、その仲間には勇者と同じ入力方向の歩行アニメを適用する
+    // (後ろに追従する仲間は、各自の実際の移動軌跡(historyLog)から方向を計算するため、drawGame側で個別に処理する)
+    const fieldLeaderForAnim = getFieldLeader();
+    if (fieldLeaderForAnim !== GameState.avatar && fieldLeaderForAnim.sprite) {
+        fieldLeaderForAnim.sprite.setDirection(player.vx, player.vy);
+        fieldLeaderForAnim.sprite.setAction(isMoving ? 'walk' : 'idle');
+    }
 
     if (isMoving) {
         const nextX = Math.max(20, Math.min(canvas.width - 20, player.x + player.vx));
@@ -2684,23 +2685,31 @@ function drawGame() {
     let hx = player.x, hy = player.y;
 
     if (!isBattling) {
-        // 仲間の隊列: 3人ごとに1列(ランク)を組み、同じ列の仲間は進行方向に対して横並びになる。
-        // 人数が増えても縦一列に間延びせず、隊列を組んで綺麗についてくる。
-        const RANK_SIZE = 3;
-        const RANK_GAP = 16; // ランクごとの追従遅延(historyLogのステップ数)
-        const SLOT_OFFSET = [-16, 16, 0]; // ランク内の並び順(左・右・中央)
+        // 仲間の隊列: 横方向オフセットは持たず、リーダーの移動履歴(historyLog)上を一定間隔で
+        // 一列に並んで追う(RPGの隊列と同じ、縦一列のみ)。履歴がまだ足りない(出現直後・
+        // ステージ移動直後)場合は、リーダーと同じX座標のまま下方向へ等間隔に並べる。
+        const FOLLOW_GAP = 18; // 隊列間隔(historyLogのステップ数)
+        const FALLBACK_SPACING = 26; // 履歴が足りない時に使う、リーダー直下への等間隔配置
         getFieldFollowers().forEach((follower, idx) => {
-            const rank = Math.floor(idx / RANK_SIZE);
-            const slot = idx % RANK_SIZE;
-            const delay = (rank + 1) * RANK_GAP;
-            const pos = historyLog[delay] || historyLog[historyLog.length - 1] || player;
-            const aheadPos = historyLog[Math.max(0, delay - 5)] || historyLog[historyLog.length - 1] || player;
-            let dx = aheadPos.x - pos.x, dy = aheadPos.y - pos.y;
-            const len = Math.hypot(dx, dy);
-            if (len < 0.01) { dx = 0; dy = 1; } else { dx /= len; dy /= len; } // 停止中は縦向き基準で横並びにする
-            const perpX = -dy, perpY = dx; // 進行方向に対して垂直(左右)のベクトル
-            const off = SLOT_OFFSET[slot] || 0;
-            drawFollowerSprite(follower, pos.x + perpX * off, pos.y + perpY * off, 0.9);
+            const delay = (idx + 1) * FOLLOW_GAP;
+            let pos, dx = 0, dy = 1, hasHistory = historyLog.length > delay;
+            if (hasHistory) {
+                pos = historyLog[delay];
+                const aheadPos = historyLog[Math.max(0, delay - 6)] || pos;
+                const rdx = aheadPos.x - pos.x, rdy = aheadPos.y - pos.y;
+                const len = Math.hypot(rdx, rdy);
+                if (len > 0.5) { dx = rdx / len; dy = rdy / len; }
+            } else {
+                // 出現直後・ステージ移動直後: リーダーと同じX座標で下方向へ等間隔に並べる(縦一列)
+                pos = { x: player.x, y: player.y + (idx + 1) * FALLBACK_SPACING };
+            }
+            // 各仲間は自分自身の実際の移動軌跡から向き・歩行アニメを決める(リーダーの入力方向をそのまま使わない)
+            if (follower.sprite) {
+                const moving = hasHistory && (dx !== 0 || dy !== 0);
+                if (moving) follower.sprite.setDirection(dx, dy); // 停止中は直前の向きを保持する
+                follower.sprite.setAction(moving ? 'walk' : 'idle');
+            }
+            drawFollowerSprite(follower, pos.x, pos.y, 0.9);
         });
         drawBossGateIndicator(ctx);
     } else if (isBattling && currentEnemy) {
@@ -4149,14 +4158,33 @@ function renderPartyFormationScreen() {
 function pfPortraitBg(p) {
     if (!p) return '';
     if (pfIsHero(p)) {
-        // 勇者は専用portraitを持たないため、既存の.party-sprite等と同じく歩行スプライトシートの先頭コマを使う
+        // 勇者は専用portraitを持たないため歩行スプライトシートの先頭コマ(下向きidle)を使う。
+        // サイズ・位置はrender後にapplyHeroPortraitBox()が実寸(高さ)から正方形になるよう計算して上書きする
+        // (ここでbackground-sizeを%指定すると、箱が正方形でない場合に縦横比が崩れて潰れて見えるため使わない)。
         const files = (typeof SPRITE_MANIFEST !== 'undefined' && SPRITE_MANIFEST.hero) ? SPRITE_MANIFEST.hero.files : null;
         const path = files ? (files[p.job] || files['勇者']) : '';
-        return path ? `background-image:url('${path}'); background-size:2000% 400%; background-position:0 0;` : '';
+        return path ? `background-image:url('${path}');` : '';
     }
     if (p.name === ASTERIA_NAME) return `background-image:url('${ASTERIA_PORTRAIT_PATH}'); background-size:600% 300%; background-position:0 0;`;
     if (!p.portraitPath) return '';
     return `background-image:url('${p.portraitPath}'); background-size:contain; background-position:center;`;
+}
+
+// 勇者の歩行スプライト(cell:48の正方形1コマ目=下向きidle)を、箱の実際の高さに合わせて
+// 正方形のまま(縦横比を保って)表示する。背景サイズを%指定すると箱が正方形でない時に潰れるため、
+// render後にoffsetHeightを読み、px単位のbackground-size/positionと要素自体の幅を計算して上書きする。
+function applyHeroPortraitBox(el) {
+    if (!el) return;
+    const h = el.offsetHeight;
+    if (!h || h < 4) return;
+    const cell = (typeof SPRITE_MANIFEST !== 'undefined' && SPRITE_MANIFEST.hero) ? SPRITE_MANIFEST.hero.cell : 48;
+    const scale = h / cell;
+    el.style.width = `${h}px`; // 正方形にする(高さ基準)。親のalign-items:center/margin:autoで中央寄せされる
+    el.style.height = `${h}px`;
+    el.style.margin = '0 auto';
+    el.style.backgroundSize = `${cell * 20 * scale}px ${cell * 4 * scale}px`; // シート全体(20列×4行)をこの倍率で
+    el.style.backgroundPosition = '0px 0px'; // 1コマ目(col0)・下向き(row0=DIR.DOWN)
+    el.style.backgroundRepeat = 'no-repeat';
 }
 
 function renderPfSlots() {
@@ -4193,6 +4221,7 @@ function renderPfSlots() {
             });
         }
         wrap.appendChild(slot);
+        if (member && pfIsHero(member)) applyHeroPortraitBox(slot.querySelector('.pf-slot-portrait'));
     }
 }
 
@@ -4235,6 +4264,7 @@ function renderPfRoster() {
             renderPfSlots(); renderPfRoster(); renderPfDetail();
         });
         grid.appendChild(card);
+        if (pfIsHero(p)) applyHeroPortraitBox(card.querySelector('.pf-card-portrait'));
     });
 }
 
@@ -4305,6 +4335,7 @@ function renderPfDetail() {
     }
     html += '</div>';
     col.innerHTML = html;
+    if (isHero) applyHeroPortraitBox(col.querySelector('.pf-detail-portrait'));
 
     const leaderBtn = document.getElementById('pf-btn-leader');
     if (leaderBtn) leaderBtn.addEventListener('click', () => pfSetLeader(pfSelectedKey));

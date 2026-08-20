@@ -16,13 +16,14 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 
 @media (max-width: 850px) {
   body { padding: 0; }
+  /* 100dvw/100dvhを基準にしつつ、4:3のアスペクト比は必ず維持する(縦横比を崩すfill/引き伸ばしは使わない)。
+     画面いっぱいまで大きくした上で縦横比を保つため、幅基準・高さ基準どちらか小さい方に自動で合わせる。
+     端末の縦横比によっては上下または左右にわずかな余白が出ることがあるが、キャラクター描画の潰れよりも優先する。 */
   #game-container {
-    width: 100dvw; height: 100dvh; max-width: none; aspect-ratio: auto; border: none; box-shadow: none;
+    width: min(100dvw, calc(100dvh * 4 / 3));
+    height: min(100dvh, calc(100dvw * 3 / 4));
+    max-width: none; aspect-ratio: 4 / 3; border: none; box-shadow: none;
   }
-  /* スマホは画面全体(100dvw/100dvh)を使うため、4:3のレターボックス(黒帯)は作らず全面フィットさせる。
-     HUD・ダイアログは#game-container(=100dvw/100dvh)いっぱいに重なる設計のまま(構造は変えない)なので、
-     canvasだけ黒帯を作ると表示内容とHUDの位置がずれてしまうため、ここだけcontainではなくfillにする。 */
-  #game-canvas { object-fit: fill; }
 }
 
 .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; flex-direction: column; justify-content: center; align-items: center; }
