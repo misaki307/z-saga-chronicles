@@ -6,9 +6,9 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 
 /* ゲーム画面本体。ステージ・戦闘の描画座標系(canvas.width/height=800x600)は一切変更しない。
    表示サイズだけをGrid/Flex/aspect-ratioで画面幅に合わせる(transform:scaleは使わない)。
-   PC: 中央に大きく表示しつつ最大幅で間延びを防ぐ。スマホ: 100dvw/100dvhを基準に画面全体を使う。 */
+   PC: 中央に大きく表示。スマホ: 100dvw/100dvhを基準に画面いっぱいへ表示する。 */
 #game-container {
-  width: min(94vw, calc(94dvh * 4 / 3), 1000px);
+  width: min(96vw, calc(96dvh * 4 / 3), 1400px);
   aspect-ratio: 4 / 3;
   background-color: #000; border: 4px solid #fff; position: relative; overflow: hidden; image-rendering: pixelated; box-shadow: 0 0 20px rgba(0,255,255,0.3);
 }
@@ -16,14 +16,12 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 
 @media (max-width: 850px) {
   body { padding: 0; }
-  /* 100dvw/100dvhを基準にしつつ、4:3のアスペクト比は必ず維持する(縦横比を崩すfill/引き伸ばしは使わない)。
-     画面いっぱいまで大きくした上で縦横比を保つため、幅基準・高さ基準どちらか小さい方に自動で合わせる。
-     端末の縦横比によっては上下または左右にわずかな余白が出ることがあるが、キャラクター描画の潰れよりも優先する。 */
+  /* スマホは画面全体(100dvw/100dvh)を優先して大きく表示する。縦長端末では縦横比が4:3から外れるため
+     キャラクター等が多少引き伸ばされる場合があるが、狭い画面での視認性を優先する。 */
   #game-container {
-    width: min(100dvw, calc(100dvh * 4 / 3));
-    height: min(100dvh, calc(100dvw * 3 / 4));
-    max-width: none; aspect-ratio: 4 / 3; border: none; box-shadow: none;
+    width: 100dvw; height: 100dvh; max-width: none; aspect-ratio: auto; border: none; box-shadow: none;
   }
+  #game-canvas { object-fit: fill; }
 }
 
 .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; flex-direction: column; justify-content: center; align-items: center; }
