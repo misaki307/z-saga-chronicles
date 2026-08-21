@@ -29,6 +29,12 @@ const ALLY_ACTIONS = {
     attack: { col: 6, frames: 4, ticks: 5, loop: false },
     damage: { col: 10, frames: 2, ticks: 8, loop: false }
 };
+// MYTHIC3人の歩行専用シート(3列×4行、方向ごとにidle/walkのみ)。攻撃/被弾コマは持たない。
+// 戦闘中はportraitPath側(drawCharacterPortrait)を使うため、ここに無くても支障はない。
+const MYTHIC_FIELD_ACTIONS = {
+    idle: { col: 0, frames: 1, ticks: 999, loop: true },
+    walk: { col: 0, frames: 3, ticks: 8, loop: true }
+};
 // 敵(方向なし・常に主人公側=左向き固定)用アクションセット
 const ENEMY_ACTIONS = {
     idle: { col: 0, frames: 2, ticks: 20, loop: true },
@@ -94,6 +100,16 @@ const SPRITE_MANIFEST = {
             sss_eden: 'assets/sprites/field/sss_eden.png'
         }
     },
+    // MYTHIC3人専用のフィールド歩行素材。他キャラと同じ48px表示に揃えるため、
+    // 表示サイズ(cell)とは別に元画像の1コマの実寸(srcCell)を指定する(このkindだけの拡張)。
+    mythic_field: {
+        cell: 48, srcCell: 362, rows: 4, actions: MYTHIC_FIELD_ACTIONS,
+        files: {
+            mythic_alcyon: 'assets/sprites/mythic/alcyon_walk.png',
+            mythic_celestia: 'assets/sprites/mythic/celestia_walk.png',
+            mythic_noctis: 'assets/sprites/mythic/noctis_walk.png'
+        }
+    },
     enemy: {
         rows: 1, actions: ENEMY_ACTIONS,
         files: {
@@ -145,6 +161,9 @@ class SpriteAnimator {
             const path = def.files[key] || Object.values(def.files)[0];
             this.img = loadSpriteImage(path);
         }
+        // 表示サイズ(cell)と元画像の1コマの実寸(srcCell)を分離できるようにする(未指定ならcellと同じ=既存動作のまま)。
+        // MYTHIC3人の高解像度歩行シート(1コマ362px)を、他キャラと同じ48px表示に揃えるために使う。
+        this.srcCell = def.srcCell || this.cell;
 
         this.dir = DIR.DOWN;
         this.action = 'idle';
@@ -222,7 +241,8 @@ class SpriteAnimator {
         const a = this.actions[this.action] || this.actions.idle;
         const col = a.col + this.frame;
         const row = this.kind === 'enemy' ? 0 : this.dir;
-        return { sx: col * this.cell, sy: row * this.cell, s: this.cell };
+        // 元画像側の切り出しはsrcCell、表示サイズ(drawSprite側)はcellを使う(既存キャラはsrcCell===cellのまま)
+        return { sx: col * this.srcCell, sy: row * this.srcCell, s: this.srcCell };
     }
 
     // 足元だけの当たり判定(スプライト矩形全体ではなく、足元の小さな帯)

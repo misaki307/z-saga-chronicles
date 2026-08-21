@@ -577,7 +577,36 @@ function startBattleBGM() {
 }
 // 戦闘終了時に呼ぶ: 現在のフィールド(currentFieldId)の曲へ、BGMManagerが1回だけ確実に切り替える。
 function endBattleBGM() {
+    stopMythicStageBgm(); // MYTHICステージ専用OGGが鳴っていれば必ず止める(非MYTHIC戦では何もしない)
     playFieldBGM();
+}
+
+// ==========================================
+// MYTHIC専用ステージBGM(OGGファイルの実音源)。既存のBGMManager(シンセ生成)とは完全に別の再生経路で、
+// この1つのAudio要素だけを使い回す(ステージ移動のたびに増殖させない・同時再生させない)。
+// SE(playSound)・既存BGM(BGMManager)には一切触れない。
+// ==========================================
+const mythicStageAudio = new Audio();
+mythicStageAudio.loop = true;
+mythicStageAudio.volume = 0.55;
+let mythicStageAudioSrc = null;
+function playMythicStageBgm(src) {
+    if (!src) return;
+    BGMManager.stop(); // 既存フィールド/戦闘BGM(シンセ)は必ず止め、二重再生を防ぐ
+    if (mythicStageAudioSrc === src && !mythicStageAudio.paused) return;
+    mythicStageAudioSrc = src;
+    mythicStageAudio.src = src;
+    mythicStageAudio.currentTime = 0;
+    const tryPlay = () => mythicStageAudio.play().catch(() => {
+        // ブラウザの自動再生制限: 次のユーザー操作(クリック等)で1回だけ再試行する
+        const resume = () => { mythicStageAudio.play().catch(() => {}); };
+        document.addEventListener('click', resume, { once: true });
+    });
+    tryPlay();
+}
+function stopMythicStageBgm() {
+    if (!mythicStageAudio.paused) mythicStageAudio.pause();
+    mythicStageAudioSrc = null;
 }
 
 // フィールド拡張: field-expansion.jsのswitchFieldMusicが呼ぶブリッジ。
@@ -737,6 +766,9 @@ function loadPartyData() {
             if (p.characterId && SPRITE_MANIFEST.ally_field && SPRITE_MANIFEST.ally_field.files[p.characterId]) {
                 return { ...p, sprite: new SpriteAnimator('ally_field', p.characterId) };
             }
+            if (p.characterId && SPRITE_MANIFEST.mythic_field && SPRITE_MANIFEST.mythic_field.files[p.characterId]) {
+                return { ...p, sprite: new SpriteAnimator('mythic_field', p.characterId) };
+            }
             return { ...p, sprite: new SpriteAnimator('ally', p.job || '裁断戦士') };
         });
     } catch (e) { /* 壊れた保存データは無視して空のパーティのまま使う */ }
@@ -779,6 +811,13 @@ const BATTLE_BG_IMAGES = {
     azurlight: loadBgImage('assets/battle_backgrounds/battle_grassland.png'),
     wardrobe_gloomwood: loadBgImage('assets/battle_backgrounds/battle_dark_closet.png'),
     laundry_abyss: loadBgImage('assets/battle_backgrounds/battle_washing_underwater.png')
+};
+// MYTHIC3人専用ステージ背景(mythicId → 画像)。フィールドではなくボス本人に紐づくため、
+// BATTLE_BG_IMAGES(fieldId基準)とは別のマップにする。
+const MYTHIC_STAGE_BG_IMAGES = {
+    mythic_alcyon: loadBgImage('assets/backgrounds/mythic/alcyon_stage.png'),
+    mythic_celestia: loadBgImage('assets/backgrounds/mythic/celestia_stage.png'),
+    mythic_noctis: loadBgImage('assets/backgrounds/mythic/noctis_stage.png')
 };
 // CSSのbackground-size:coverと同じ考え方で、縦横比を保ったまま中央基準にトリミングして描画する
 function drawCoverImage(ctxObj, img, dx, dy, dw, dh) {
@@ -1315,6 +1354,8 @@ const MYTHIC_CHARACTERS = [
         id: 'mythic_alcyon', name: '天継の王裁・アルシオン', attribute: '光', role: '王裁騎士',
         unlockPoints: 500, questId: 'mythic_quest_alcyon', questTitle: '神話継承Ⅰ　星を裁つ王',
         image: 'assets/characters/mythic/alcyon.png', color: '#2f4f9c',
+        fieldSprite: 'assets/sprites/mythic/alcyon_walk.png',
+        stageBackground: 'assets/backgrounds/mythic/alcyon_stage.png', stageBgm: 'assets/bgm/mythic/alcyon_stage.ogg',
         boss: { hpMulti: 1.35, atkMulti: 1.12, phases: 2, mechanicText: '光る金糸を先に断たないと本体への通常攻撃が軽減される。必殺技(貫通攻撃)で断ち切ろう。' },
         skill: { name: '天縫奥義・星界裁断', description: '巨大な王裁鋏で星糸を断ち、大ダメージ。味方全体へ一度だけ被ダメージ軽減を付与する。', effectTheme: 'navy_gold_scissors_constellation_threads', color: '#ffd45a' },
         joinMessage: '見事だ。次は私の裁断で、君たちの旅路を切り拓こう。'
@@ -1323,6 +1364,8 @@ const MYTHIC_CHARACTERS = [
         id: 'mythic_celestia', name: '星織の女皇・セレスティア', attribute: '氷', role: '星織女皇',
         unlockPoints: 1200, questId: 'mythic_quest_celestia', questTitle: '神話継承Ⅱ　星海を織る女皇',
         image: 'assets/characters/mythic/celestia.png', color: '#7a4fc9',
+        fieldSprite: 'assets/sprites/mythic/celestia_walk.png',
+        stageBackground: 'assets/backgrounds/mythic/celestia_stage.png', stageBgm: 'assets/bgm/mythic/celestia_stage.ogg',
         boss: { hpMulti: 1.65, atkMulti: 1.2, phases: 3, mechanicText: '星布の色に対応する属性の攻撃でなければ結界を解けず、放っておくと自己回復と全体攻撃を繰り返す。' },
         skill: { name: '星織奥義・天衣創世', description: '星海の布を織り上げ大ダメージ。味方全体を回復し、女皇の封印を打ち消す。', effectTheme: 'violet_cyan_loom_aurora_ribbons', color: '#7ce0ff' },
         joinMessage: 'あなたの想いは確かに織り上がりました。私も旅の一糸となりましょう。'
@@ -1331,6 +1374,8 @@ const MYTHIC_CHARACTERS = [
         id: 'mythic_noctis', name: '輪廻布の黒冠・ノクティス', attribute: '闇', role: '黒冠継承者',
         unlockPoints: 2500, questId: 'mythic_quest_noctis', questTitle: '神話継承Ⅲ　忘却を纏う黒冠',
         image: 'assets/characters/mythic/noctis.png', color: '#7a1f2b',
+        fieldSprite: 'assets/sprites/mythic/noctis_walk.png',
+        stageBackground: 'assets/backgrounds/mythic/noctis_stage.png', stageBgm: 'assets/bgm/mythic/noctis_stage.ogg',
         boss: { hpMulti: 2.0, atkMulti: 1.3, phases: 3, mechanicText: '破れた外套を再縫製し一度だけ復活する。必殺技(貫通攻撃)を当てておけば再縫製の核を破壊し復活を防げる。' },
         skill: { name: '黒環奥義・不滅再縫', description: '黒環の縫い糸で大ダメージを与え、その一部を味方全体のHPとして還元する。戦闘中一度だけ戦闘不能を耐える。', effectTheme: 'black_crimson_eclipse_needles_phoenix_cloth', color: '#ff3d5a' },
         joinMessage: '捨てられた記憶まで背負う覚悟、見届けた。黒冠の力を預けよう。'
@@ -1662,6 +1707,10 @@ CHARACTER_ROSTER.forEach(c => {
     img.src = c.portrait;
     PORTRAIT_IMAGES[c.portrait] = img;
 });
+// MYTHIC3人は意図的にPORTRAIT_IMAGESへ登録しない: 大判絵(1200px超)は戦闘中の小さな仲間枠(48px前後)まで
+// 縮小するとノイズ状に潰れて見えるため、その用途では本人専用のmythic_field歩行スプライト(idleコマ)を
+// 使う(drawFollowerSprite側は自動でそちらへフォールバックする)。ボス本人の大判絵表示(神話継承クエスト本体)は
+// MYTHIC_PORTRAIT_IMAGESを直接使う別経路のままで、ここには影響しない。
 
 // レア度が高いほど強いキャラが出るようにし、抽選演出の派手さも段階的に変える(合計100%: SSS1/SS4/S10/A20/B30/C35)
 const RARITY_TABLE = [
@@ -3058,7 +3107,10 @@ function drawBossGateIndicator(ctxObj) {
 function drawBattleArena(ctxObj) {
     // ステージ別の戦闘背景(静止画)。キャラクター・敵・HP・メッセージ・コマンドボタンより
     // 必ず先(=後ろのレイヤー)に描く。background-size:coverと同じ考え方で中央基準にトリミングする。
-    const battleImg = BATTLE_BG_IMAGES[GameState.currentFieldId];
+    // MYTHICボス戦だけは、フィールド(GameState.currentFieldId)ではなく本人専用のステージ背景を使う。
+    const battleImg = (currentEnemy && currentEnemy.isMythicBoss)
+        ? MYTHIC_STAGE_BG_IMAGES[currentEnemy.mythicId]
+        : BATTLE_BG_IMAGES[GameState.currentFieldId];
     if (battleImg && battleImg.complete && battleImg.naturalWidth > 0) {
         drawCoverImage(ctxObj, battleImg, 0, 0, 800, 600);
     } else {
@@ -3914,6 +3966,26 @@ function openFieldTravel() {
     plazaBtn.addEventListener('click', () => { closeFieldTravel(); enterLaundryPlaza(); });
     plazaLi.appendChild(plazaBtn);
     list.appendChild(plazaLi);
+
+    // 神話継承の試練: 循環ポイント到達で解放される専用ステージ。クリア後も再訪(再戦)できるようにする。
+    refreshMythicQuestUnlocks();
+    const pts = InheritanceState.circulationPoints || 0;
+    MYTHIC_CHARACTERS.forEach(def => {
+        const st = MythicQuestState[def.questId] || { status: 'locked' };
+        const li = document.createElement('li');
+        li.style.margin = '6px 0';
+        if (st.status === 'locked') {
+            li.innerHTML = `<span style="opacity:.5; padding:8px; display:inline-block;">🔒 神話継承の試練「${def.name}」（循環ポイント${pts}/${def.unlockPoints}）</span>`;
+        } else {
+            const btn = document.createElement('button');
+            btn.className = 'retro-btn cmd-btn';
+            btn.textContent = st.status === 'cleared' ? `🔁 神話継承の試練「${def.name}」（再戦）` : `⚔️ 神話継承の試練「${def.name}」`;
+            btn.addEventListener('click', () => { closeFieldTravel(); startMythicBossEncounter(def.id); });
+            li.appendChild(btn);
+        }
+        list.appendChild(li);
+    });
+
     document.getElementById('field-travel-panel').classList.remove('hidden');
 }
 function closeFieldTravel() { document.getElementById('field-travel-panel').classList.add('hidden'); }
@@ -4334,6 +4406,7 @@ function triggerGameOver(reason) {
     isBattling = false; currentEnemy = null; battleViewState = 'idle'; activeFighter = null;
     battleDlg.classList.add('hidden');
     stopBGM(); // 戦闘BGMを止める(重複再生防止。回復の間・復帰後の再生は別途行う)
+    stopMythicStageBgm(); // MYTHICステージ専用OGGが鳴っていれば必ず止める(非MYTHIC戦では何もしない)
     playSound('hit');
     const gameoverText = document.getElementById('gameover-text');
     if (gameoverText) {
@@ -4496,7 +4569,7 @@ function startMythicBossEncounter(mythicId) {
         bName.textContent = `⚠️【神話継承クエスト】${def.questTitle}`;
         bMsg.textContent = `${def.name}が立ちはだかる…！ ${def.boss.mechanicText}`;
         bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden');
-        startBattleBGM();
+        playMythicStageBgm(def.stageBgm); // 専用ステージへ入った瞬間、既存フィールド/戦闘BGMを止めて専用OGGを1曲だけループ再生する
     }, 1200);
 }
 
@@ -5193,9 +5266,8 @@ function handleMythicBossVictory(bossEnemy) {
     const result = addOrEnhancePartyMember({
         name: def.name, job: def.role, rarity: 'MYTHIC', style: def.attribute, color: def.color,
         characterId: def.id, portraitPath: def.image, isDragon: false, originItem: '神話継承クエスト',
-        // フィールド歩行用の専用スプライトシートは同梱されていないため、既存の仲間用共通歩行素材で代用する
-        // (一覧・編成・戦闘の本人画像はportraitPath=def.imageを使うため、本人の見た目自体は損なわれない)
-        sprite: new SpriteAnimator('ally', def.role)
+        // フィールド歩行は本人専用のmythic_fieldスプライト(4方向・362px元コマ)を使う。汎用ally画像へは差し替えない。
+        sprite: new SpriteAnimator('mythic_field', def.id)
     });
     state.status = 'cleared';
     state.rewardClaimed = true;
