@@ -1,4 +1,21 @@
 // ==========================================
+// 公開版 初期化: 開発中に溜まったテスト用セーブデータ(所持G・所持キャラ・パーティー編成・
+// 解放済みステージ・討伐記録・循環ポイント等、zsaga_で始まるキー全て)を、このブラウザで
+// 一度だけ消去する。フラグ(ZSAGA_MIGRATION_KEY)を立てた後は二度と実行しないため、
+// ページを再読み込みするたびに初期化されることはない。以後のプレイ内容は通常どおり保存される。
+// ==========================================
+(function migrateToPublicReleaseOnce() {
+    const ZSAGA_MIGRATION_KEY = 'zsaga_public_release_migrated_v1';
+    try {
+        if (localStorage.getItem(ZSAGA_MIGRATION_KEY)) return; // 既に移行済みなら何もしない
+        Object.keys(localStorage)
+            .filter(k => k.startsWith('zsaga_') && k !== ZSAGA_MIGRATION_KEY)
+            .forEach(k => localStorage.removeItem(k));
+        localStorage.setItem(ZSAGA_MIGRATION_KEY, '1');
+    } catch (e) { /* localStorageが使えない環境では何もしない */ }
+})();
+
+// ==========================================
 // ロゴ表示: assets/logo.png があれば画像ロゴを、無ければテキストロゴを表示
 // ==========================================
 (function initLogo() {
@@ -2280,6 +2297,19 @@ function getActivePartyResolved() {
 function getActiveParty() {
     return getActivePartyResolved().filter(p => p !== GameState.avatar);
 }
+// 勇者が現在の編成(activePartyIds)に含まれているか。パーティー編成画面で外した場合はfalseになる。
+function isHeroActive() {
+    return GameState.activePartyIds.includes(HERO_KEY);
+}
+// 戦闘の前衛(現在「たたかう」を行う本人)を返す。activeFighter(仲間と交代中)が優先され、
+// 未交代なら勇者(編成にいる場合)、勇者が編成にいなければ現在の編成の先頭(生存者優先)を返す。
+// これにより、勇者を編成から外した状態では戦闘に一切現れなくなる。
+function getFrontFighter() {
+    if (activeFighter) return activeFighter;
+    if (isHeroActive()) return GameState.avatar;
+    const party = getActiveParty();
+    return party.find(p => typeof p.hp !== 'number' || p.hp > 0) || party[0] || null;
+}
 // フィールドで先頭に立ち、プレイヤーが操作するキャラ(勇者 or 仲間の誰か)を返す
 function getFieldLeader() {
     let leader = resolvePartyMember(GameState.leaderId);
@@ -2350,6 +2380,7 @@ function setActiveParty(ids, preferredLeaderId) {
         GameState.leaderId = sanitized[0]; // リーダーが編成から外れた場合、先頭を新リーダーにする
     }
     saveActivePartyIds();
+    updateFieldLeaderHUD(); // 上部バーの表示名/HPを新しいリーダーへ即時反映する
     return true;
 }
 
@@ -3249,9 +3280,13 @@ function drawGame() {
         });
         drawBossGateIndicator(ctx);
     } else if (isBattling && currentEnemy) {
-        // 交代中は前衛(activeFighter)を後衛グリッドから外し、代わりにベンチの勇者をそこに並べる
+        // 前衛(getFrontFighterが返す本人)を後衛グリッドから外す。勇者が編成にいて前衛でない場合だけ、
+        // ベンチの勇者をそこに並べる(勇者が編成にいなければ一切表示しない)。
         const activeParty = getActiveParty();
-        const benchList = activeFighter ? [GameState.avatar, ...activeParty.filter(p => p !== activeFighter)] : activeParty;
+        const battleFront = getFrontFighter();
+        const benchList = (isHeroActive() && battleFront !== GameState.avatar)
+            ? [GameState.avatar, ...activeParty.filter(p => p !== battleFront)]
+            : activeParty.filter(p => p !== battleFront);
         benchList.forEach((follower, i) => {
             let px = 100 - (Math.floor(i / 3) * 30), py = 300 + ((i % 3) * 60);
             drawFollowerSprite(follower, px, py, 0.9, true);
@@ -3277,11 +3312,11 @@ function drawGame() {
         hx = 200 + 350 * attackLungeT; hy = 400;
     }
 
-    // 前衛(戦闘中の交代仲間・通常時の勇者は既存仕様のまま。フィールドだけは編成中のリーダーを表示する)
+    // 前衛(戦闘中はgetFrontFighter()の本人・フィールドは編成中のリーダーを表示する)
     const fieldLeader = isBattling ? null : getFieldLeader();
-    const frontFighter = (isBattling && activeFighter) ? activeFighter : (isBattling ? GameState.avatar : fieldLeader);
+    const frontFighter = isBattling ? getFrontFighter() : fieldLeader;
     if (!isFashionShow && frontFighter && frontFighter.sprite) {
-        if (hasTrendBuff && !activeFighter) {
+        if (hasTrendBuff && frontFighter === GameState.avatar) {
             ctx.fillStyle = 'rgba(255, 255, 0, 0.4)';
             ctx.beginPath(); ctx.arc(hx, hy - 5, 30 + Math.sin(GameState.globalTime * 0.2) * 5, 0, Math.PI * 2); ctx.fill();
         }
@@ -3293,28 +3328,28 @@ function drawGame() {
             ctx.fillStyle = grad;
             ctx.beginPath(); ctx.arc(hx, hy - 15, pulse, 0, Math.PI * 2); ctx.fill();
         }
-        if (isBattling && activeFighter) {
-            // 交代中の前衛は仲間用の共通ヘルパーを使う(アステア専用ポートレート等の優先順位も後衛グリッドと揃う)
-            drawFollowerSprite(activeFighter, hx, hy, 1.5, true);
+        if (isBattling && frontFighter !== GameState.avatar) {
+            // 交代中(または勇者不在で仲間が前衛)は仲間用の共通ヘルパーを使う(アステア専用ポートレート等の優先順位も後衛グリッドと揃う)
+            drawFollowerSprite(frontFighter, hx, hy, 1.5, true);
         } else if (!isBattling && fieldLeader !== GameState.avatar) {
             // フィールドのリーダーが仲間の場合も、他の追従仲間と同じヘルパーで描く(専用ポートレート等の優先順位を揃える)
             drawFollowerSprite(fieldLeader, hx, hy, 1, false);
         } else {
             drawSprite(ctx, frontFighter.sprite, hx, hy, { scale: isBattling ? 1.5 : 1 });
         }
-        // 交代中は前衛の仲間にも小さなHPバーを出す(後衛グリッドと同じ見た目)
+        // 交代中(または勇者不在で仲間が前衛)は前衛の仲間にも小さなHPバーを出す(後衛グリッドと同じ見た目)
         // 枠線(strokeRect)は非整数倍率での拡大表示時に途切れて見えることがあるため使わず、
         // 後衛グリッドと同じく縁取り矩形の二重塗りで表現する。
-        if (isBattling && activeFighter && typeof activeFighter.hp === 'number' && typeof activeFighter.maxHp === 'number') {
+        if (isBattling && frontFighter !== GameState.avatar && typeof frontFighter.hp === 'number' && typeof frontFighter.maxHp === 'number') {
             const barW = 50, barH = 6, barX = hx - barW / 2, barY = hy - 96;
-            const pct = Math.max(0, activeFighter.hp / activeFighter.maxHp);
+            const pct = Math.max(0, frontFighter.hp / frontFighter.maxHp);
             ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
             ctx.fillStyle = '#3a1010'; ctx.fillRect(barX, barY, barW, barH);
-            ctx.fillStyle = activeFighter.hp <= 0 ? '#803030' : (pct < 0.3 ? '#e05a3a' : '#4fd06a');
+            ctx.fillStyle = frontFighter.hp <= 0 ? '#803030' : (pct < 0.3 ? '#e05a3a' : '#4fd06a');
             ctx.fillRect(barX, barY, barW * pct, barH);
             // 属性の対応色を小さな丸で示す(承認済みキャラのみ)
-            if (activeFighter.style && STYLE_COLORS[activeFighter.style]) {
-                ctx.fillStyle = STYLE_COLORS[activeFighter.style];
+            if (frontFighter.style && STYLE_COLORS[frontFighter.style]) {
+                ctx.fillStyle = STYLE_COLORS[frontFighter.style];
                 ctx.beginPath(); ctx.arc(barX + barW + 8, barY + 3, 4, 0, Math.PI * 2); ctx.fill();
                 ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
             }
@@ -4121,7 +4156,7 @@ function startGame() {
 document.getElementById('btn-start-adventure').addEventListener('click', startGame);
 document.getElementById('btn-skip').addEventListener('click', () => {
     GameState.avatar = { name: '伝説の紋章・ゼアル', job: '勇者', style: '炎', color: '#ff4500', hp: 150, maxHp: 150, mp: 100, maxMp: 100, agi: 80, tension: 50 };
-    startGame(); updateGold(500);
+    startGame();
 });
 
 // 起動時: 保存済みの勇者があれば、祭壇画面(儀式)を出さずそのまま冒険を再開する(自動ログイン)。
@@ -4350,8 +4385,20 @@ function updateHPUI() {
     if (!currentEnemy) return; const pct = Math.max(0, (currentEnemy.hp / currentEnemy.maxHp) * 100); hpFill.style.width = `${pct}%`; hpFill.style.background = pct > 50 ? '#00ff00' : (pct > 20 ? '#ffaa00' : '#ff0000');
 }
 
-// 戦闘HUD: 勇者のHP/MPバーを更新する
+// フィールド上部バー(ui-player-name/ui-hp): 勇者固定ではなく、現在のフィールドリーダー(getFieldLeader)を表示する。
+// 勇者を編成から外している間は、この欄にも勇者は一切表示されない。
+function updateFieldLeaderHUD() {
+    const leader = getFieldLeader();
+    const nameEl = document.getElementById('ui-player-name');
+    const hpEl = document.getElementById('ui-hp');
+    if (nameEl) nameEl.textContent = leader.name;
+    if (hpEl) hpEl.textContent = Math.round(typeof leader.hp === 'number' ? leader.hp : (leader.maxHp || 0));
+}
+
+// 戦闘HUD: 勇者のHP/MPバーを更新する。勇者が編成にいない間は、この専用HUD自体を隠す。
 function updateHeroHUD() {
+    const battleHud = document.getElementById('battle-hud');
+    if (battleHud) battleHud.classList.toggle('hidden', !isHeroActive());
     const av = GameState.avatar;
     const hpPct = Math.max(0, Math.min(100, (av.hp / (av.maxHp || 100)) * 100));
     const mpPct = Math.max(0, Math.min(100, (av.mp / (av.maxMp || 50)) * 100));
@@ -4359,7 +4406,7 @@ function updateHeroHUD() {
     if (heroMpFill) heroMpFill.style.width = `${mpPct}%`;
     if (heroHpText) heroHpText.textContent = Math.round(av.hp);
     if (heroMpText) heroMpText.textContent = Math.round(av.mp);
-    document.getElementById('ui-hp').textContent = Math.round(av.hp);
+    updateFieldLeaderHUD();
     updateItemButtonLabel();
     saveAvatar();
 }
@@ -4376,15 +4423,18 @@ function updateItemButtonLabel() {
 const ENEMY_SPECIAL_NAMES = { mid: '服飾呪縛', boss: '百鬼衣装絶' };
 
 // 反撃の対象をランダムに1体選ぶ({type:'hero'} または {type:'ally', ally})
+// 勇者が現在の編成にいない場合は、勇者を抽選プールへ一切含めない(戦闘に存在しないため)。
 function pickCounterTarget() {
     const livingAllies = getActiveParty().filter(p => typeof p.hp !== 'number' || p.hp > 0);
-    if (activeFighter) {
-        // 交代中: 矢面に立つ仲間を勇者の代わりに抽選プールへ入れ、ベンチの勇者は他の仲間と同列で混ぜる
-        const benchAllies = livingAllies.filter(a => a !== activeFighter);
-        const pool = [{ type: 'ally', ally: activeFighter }, { type: 'hero' }, ...benchAllies.map(a => ({ type: 'ally', ally: a }))];
+    const heroEntry = isHeroActive() ? [{ type: 'hero' }] : [];
+    const front = getFrontFighter();
+    if (front && front !== GameState.avatar) {
+        // 交代中(または勇者不在で仲間が前衛): 矢面に立つ仲間を抽選プールへ入れ、ベンチの勇者(いれば)は他の仲間と同列で混ぜる
+        const benchAllies = livingAllies.filter(a => a !== front);
+        const pool = [{ type: 'ally', ally: front }, ...heroEntry, ...benchAllies.map(a => ({ type: 'ally', ally: a }))];
         return pool[Math.floor(Math.random() * pool.length)];
     }
-    const pool = [{ type: 'hero' }, ...livingAllies.map(a => ({ type: 'ally', ally: a }))];
+    const pool = [...heroEntry, ...livingAllies.map(a => ({ type: 'ally', ally: a }))];
     return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -4461,8 +4511,9 @@ function enemyCounterAttack(onDone) {
     const target = pickCounterTarget();
 
     // 反撃後、勇者のHPが0、または仲間が全滅していたらゲームオーバーへ切り替える(通常のonDoneは呼ばない)
+    // 勇者が編成にいない場合、勇者のHPは戦闘に無関係なので判定しない。
     const finish = () => {
-        if (GameState.avatar.hp <= 0) { triggerGameOver('hero'); return; }
+        if (isHeroActive() && GameState.avatar.hp <= 0) { triggerGameOver('hero'); return; }
         if (isPartyWiped()) { triggerGameOver('party'); return; }
         if (onDone) onDone();
     };
@@ -4508,8 +4559,9 @@ function triggerGameOver(reason) {
     playSound('hit');
     const gameoverText = document.getElementById('gameover-text');
     if (gameoverText) {
+        // 勇者が編成にいない場合、'party'敗北時の文面にも勇者を登場させない
         gameoverText.textContent = reason === 'party'
-            ? '仲間は全滅した…勇者だけが立ち尽くす…'
+            ? (isHeroActive() ? '仲間は全滅した…勇者だけが立ち尽くす…' : '仲間は全滅した…')
             : '勇者は力尽きた…意識が遠のいていく…';
     }
     document.getElementById('game-screen').classList.replace('active', 'hidden');
@@ -4916,17 +4968,17 @@ function executeAttack(damageMulti = 1, attackTypeStr = '攻撃', isPiercing = f
     slashEffectTimer = 15; screenShakeTimer = 20;
     attackLungeDir = 1; setTimeout(() => { attackLungeDir = -1; }, 260); // 踏み込み攻撃: 前進してから構え位置へ戻る
 
-    // 交代中は「たたかう」を今の主戦力(仲間)が行う。ベンチの勇者は攻撃しない。
-    const attacker = activeFighter || GameState.avatar;
+    // 交代中(または勇者不在で仲間が前衛)は「たたかう」を今の主戦力(仲間)が行う。ベンチの勇者は攻撃しない。
+    const attacker = getFrontFighter();
     if (attacker.sprite) attacker.sprite.setAction('attack'); // 攻撃中は移動を制限(既にbattleViewStateで制限済み)
 
     // Check Perfect Fit Connect(主戦力と同じ仲間は連携に含めない)
-    let perfectFitAllies = getActiveParty().filter(p => p !== activeFighter && (p.style === attacker.style || p.style === currentEnemy.style) && (typeof p.hp !== 'number' || p.hp > 0));
+    let perfectFitAllies = getActiveParty().filter(p => p !== attacker && (p.style === attacker.style || p.style === currentEnemy.style) && (typeof p.hp !== 'number' || p.hp > 0));
 
     let rawDmg;
-    if (activeFighter) {
-        const base = getAllyAttackBase(activeFighter, 'select');
-        rawDmg = Math.round(base * getAllyDamageMultiplier(activeFighter) * damageMulti);
+    if (attacker !== GameState.avatar) {
+        const base = getAllyAttackBase(attacker, 'select');
+        rawDmg = Math.round(base * getAllyDamageMultiplier(attacker) * damageMulti);
     } else {
         const tensionScore = GameState.avatar.tension || 0;
         rawDmg = Math.floor((Math.random() * 30 + 50) * damageMulti + (tensionScore / 5));
@@ -5008,7 +5060,8 @@ function perfectFitPhase(allies) {
 function coOpPhase() {
     if (!currentEnemy || currentEnemy.hp <= 0) return;
     const coOpParty = getActiveParty();
-    if (coOpParty.length === 0) {
+    // 前衛(既に自分の攻撃を終えた本人)以外に追撃できる仲間がいない場合は、無意味な「0ダメージ」表示をせず反撃へ進む
+    if (coOpParty.filter(p => p !== getFrontFighter()).length === 0) {
         bMsg.textContent = `【${currentEnemy.name}】は渋っている...`;
         enemyCounterAttack(() => { battleViewState = 'idle'; bActions.classList.remove('hidden'); });
         return;
@@ -5036,7 +5089,7 @@ function coOpPhase() {
         }
         let ally = coOpParty[index];
         if (typeof ally.hp === 'number' && ally.hp <= 0) { attackAlly(index + 1); return; } // 戦闘不能の仲間は追撃に参加しない
-        if (ally === activeFighter) { attackAlly(index + 1); return; } // 交代中の主戦力は既に自分の攻撃を終えているので追撃には参加しない
+        if (ally === getFrontFighter()) { attackAlly(index + 1); return; } // 前衛(交代中の主戦力、または勇者不在時の前衛)は既に自分の攻撃を終えているので追撃には参加しない
         let base = getAllyAttackBase(ally, 'coop');
         let rawDmg = Math.round(base * getAllyDamageMultiplier(ally) * getElementMultiplier(ally.style, currentEnemy.style)); // 属性の三すくみ補正
         if (ally.sprite) { ally.sprite.setAction('attack'); setTimeout(() => ally.sprite.setAction('idle'), 300); }
@@ -5080,8 +5133,9 @@ function openAllySelect() {
     bActions.classList.add('hidden');
     allySelectPanel.innerHTML = '';
 
-    // 交代中は、勇者と完全に交代して戻すボタンを一番上に出す
-    if (activeFighter) {
+    // 交代中は、勇者と完全に交代して戻すボタンを一番上に出す(勇者が編成にいる場合だけ)
+    const battleFrontForSelect = getFrontFighter();
+    if (isHeroActive() && battleFrontForSelect !== GameState.avatar) {
         const heroBtn = document.createElement('button');
         heroBtn.className = 'retro-btn cmd-btn';
         heroBtn.textContent = `🔄 ${GameState.avatar.name}(勇者)と交代する`;
@@ -5144,7 +5198,7 @@ function openAllySelect() {
             allySelectPanel.appendChild(mythicBtn);
         }
 
-        if (ally !== activeFighter) {
+        if (ally !== battleFrontForSelect) {
             const swapBtn = document.createElement('button');
             swapBtn.className = 'retro-btn cmd-btn';
             swapBtn.textContent = `🔄 ${ally.name}と交代する`;
@@ -5281,6 +5335,7 @@ document.getElementById('btn-ally').addEventListener('click', openAllySelect);
 
 document.getElementById('btn-skill').addEventListener('click', () => {
     if (battleViewState !== 'idle' || !currentEnemy) return;
+    if (!isHeroActive()) { playSound('hit'); bMsg.textContent = `衣装奥義は勇者専用！ 勇者は編成にいない…`; return; } // 勇者が編成にいなければ使えない
     if (activeFighter) { playSound('hit'); bMsg.textContent = `衣装奥義は勇者専用！ 交代中は使えない…`; return; } // 仲間と交代中は勇者専用の奥義は使えない
     if (GameState.avatar.mp < 10) { playSound('hit'); bMsg.textContent = `MP不足！`; return; }
     GameState.avatar.mp -= 10; updateHeroHUD();
@@ -5306,15 +5361,28 @@ document.getElementById('btn-item').addEventListener('click', () => {
     playSound('select');
     battleViewState = 'attacking'; bActions.classList.add('hidden');
     GameState.items.potion--;
-    const healAmount = Math.max(1, Math.round((GameState.avatar.maxHp || 100) * 0.5));
-    const mpHealAmount = Math.max(1, Math.round((GameState.avatar.maxMp || 50) * 0.5));
-    GameState.avatar.hp = Math.min(GameState.avatar.maxHp || 100, GameState.avatar.hp + healAmount);
-    GameState.avatar.mp = Math.min(GameState.avatar.maxMp || 50, GameState.avatar.mp + mpHealAmount);
-    updateHeroHUD();
+    let healMsg;
+    if (isHeroActive()) {
+        const healAmount = Math.max(1, Math.round((GameState.avatar.maxHp || 100) * 0.5));
+        const mpHealAmount = Math.max(1, Math.round((GameState.avatar.maxMp || 50) * 0.5));
+        GameState.avatar.hp = Math.min(GameState.avatar.maxHp || 100, GameState.avatar.hp + healAmount);
+        GameState.avatar.mp = Math.min(GameState.avatar.maxMp || 50, GameState.avatar.mp + mpHealAmount);
+        updateHeroHUD();
+        showHeal(200, 380, healAmount);
+        healMsg = `回復薬を使った！ HPが${healAmount}・MPが${mpHealAmount}回復した！(残り${GameState.items.potion}個)`;
+    } else {
+        // 勇者が編成にいない場合は、現在の前衛(getFrontFighter)を回復する(勇者にはMPが無いallyオブジェクトのためHPのみ)
+        const healTarget = getFrontFighter();
+        const healAmount = Math.max(1, Math.round((healTarget.maxHp || 100) * 0.5));
+        healTarget.hp = Math.min(healTarget.maxHp || 100, (healTarget.hp || 0) + healAmount);
+        savePartyData();
+        updateItemButtonLabel();
+        showHeal(200, 380, healAmount);
+        healMsg = `回復薬を使った！ ${healTarget.name}のHPが${healAmount}回復した！(残り${GameState.items.potion}個)`;
+    }
     playHealFanfare();
     spawnMagicParticles(200, 400, 200, 220, '#66ffaa');
-    showHeal(200, 380, healAmount);
-    bMsg.textContent = `回復薬を使った！ HPが${healAmount}・MPが${mpHealAmount}回復した！(残り${GameState.items.potion}個)`;
+    bMsg.textContent = healMsg;
 
     setTimeout(() => {
         enemyCounterAttack(() => {
@@ -5994,6 +6062,7 @@ function pfSetLeader(key) {
     if (!GameState.activePartyIds.includes(key)) return;
     GameState.leaderId = key;
     saveActivePartyIds();
+    updateFieldLeaderHUD(); // 上部バーの表示名/HPを新しいリーダーへ即時反映する
     playSound('select');
     renderPartyFormationScreen();
 }

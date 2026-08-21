@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Z-SAGA: CHRONICLES</title>
-  <link rel="stylesheet" href="style.css?v=20260822f">
+  <link rel="stylesheet" href="style.css?v=20260822h">
   <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -247,9 +247,13 @@
         <!-- 服の継承: 到着・評価ポップアップ -->
         <div id="inheritance-arrival-dialog" class="dialog hidden">
           <div class="paper-texture ihq-arrival-box">
-            <h3><img class="ihq-arrival-title-icon" src="assets/ui/inheritance/arrival_door.png" alt="">継承が届きました</h3>
-            <div id="ihq-arrival-body"></div>
-            <button id="btn-close-inheritance-arrival" class="retro-btn small-btn" style="margin-top:15px;">閉じる</button>
+            <div class="ihq-arrival-scroll">
+              <h3><img class="ihq-arrival-title-icon" src="assets/ui/inheritance/arrival_door.png" alt="">継承が届きました</h3>
+              <div id="ihq-arrival-body"></div>
+            </div>
+            <div class="ihq-arrival-actions">
+              <button id="btn-close-inheritance-arrival" class="retro-btn small-btn">閉じる</button>
+            </div>
           </div>
         </div>
 
@@ -366,11 +370,11 @@
   </div>
 
   <!-- 背景描画モジュール（差し替え予定）: drawMap(ctx, frame) を提供 -->
-  <script src="background.js?v=20260822f"></script>
+  <script src="background.js?v=20260822h"></script>
   <!-- スプライトエンジン: 外部PNGスプライトシートの読込・アニメーション制御 -->
-  <script src="sprites.js?v=20260822f"></script>
+  <script src="sprites.js?v=20260822h"></script>
   <!-- フィールド拡張: 3ステージの設定値・敵倍率・背景アニメーション・BGM切替フック(データのみ) -->
-  <script src="field-expansion.js?v=20260822f"></script>
-  <script src="main.js?v=20260822f"></script>
+  <script src="field-expansion.js?v=20260822h"></script>
+  <script src="main.js?v=20260822h"></script>
 </body>
 </html>

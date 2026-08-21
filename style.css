@@ -705,8 +705,21 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .ihq-win-pip { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #45b8ff; display: flex; align-items: center; justify-content: center; font-size: 12px; }
 .ihq-win-pip.filled { background: #45b8ff; color: #06101f; }
 
-/* 到着ポップアップ */
-.ihq-arrival-box { max-height: 80vh; overflow-y: auto; }
+/* 到着ポップアップ: 本文だけをスクロール領域にし、閉じるボタンは常時表示のフッターとして
+   Flexboxの別要素に分ける(スクロール内容と重なったり画面外へ切れたりしない)。 */
+.ihq-arrival-box { max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; }
+.ihq-arrival-scroll { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+/* 閉じるボタン領域: 横幅100%のFlexboxで常に下部中央に表示する */
+.ihq-arrival-actions {
+  flex: 0 0 auto; width: 100%;
+  display: flex; justify-content: center; align-items: center;
+  margin: 16px -30px -30px; padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  background: #fdf6e3; border-top: 2px dotted #a1887f;
+}
+.ihq-arrival-actions .retro-btn { min-height: 44px; width: min(240px, 100%); }
+#ui-overlay:has(#inheritance-arrival-dialog:not(.hidden)) #virtual-dpad {
+  display: none !important;
+}
 .ihq-arrival-portrait { width: 100%; max-width: 220px; height: 200px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; }
 .ihq-arrival-portrait img { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: pixelated; }
 .ihq-arrival-photo { width: 100%; max-width: 160px; height: 120px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; background: #0b1730; border: 2px solid #2a5c86; border-radius: 4px; overflow: hidden; }
