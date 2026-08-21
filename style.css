@@ -639,3 +639,85 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .cmd-btn.ult-btn { border-color: #ffd45a; color: #ffe9a8; }
 .cmd-btn.ult-btn:not(:disabled):hover { background: rgba(255, 212, 90, .12); }
 .cmd-btn.ult-btn:disabled { opacity: .5; cursor: default; filter: grayscale(60%); }
+
+/* ==========================================
+   服の継承クエスト(既存のパーティー編成画面と同じ大画面パターンを踏襲)
+   ========================================== */
+.ihq-menu-entry { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+#ihq-menu-summary { margin: 0; font-size: 13px; color: #d9ccff; }
+#inheritance-screen {
+  top: 1.5%; bottom: auto; width: 92%; height: 97%; padding: 10px 14px;
+  display: flex; flex-direction: column; overflow: hidden; z-index: 80;
+  background: #06101f; border-color: #e9d9a4;
+  box-shadow: inset 0 0 0 4px #176c8c, 0 0 30px rgba(0,229,255,.55), 6px 6px 0 rgba(0,0,0,.8);
+  text-align: left; font-size: 15px; line-height: 1.35;
+}
+.ihq-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; flex: 0 0 auto; }
+.ihq-tab-btn { font-family: 'DotGothic16', monospace; background: #0b1730; color: #9fe8ff; border: 2px solid #2a5c86; padding: 5px 9px; font-size: 12px; cursor: pointer; border-radius: 3px; display: inline-flex; align-items: center; gap: 4px; }
+.ihq-tab-icon { width: 18px; height: 18px; object-fit: contain; image-rendering: pixelated; vertical-align: middle; }
+.ihq-arrival-title-icon { width: 22px; height: 22px; object-fit: contain; image-rendering: pixelated; vertical-align: middle; margin-right: 4px; }
+.ihq-tab-btn.active { background: #163a63; color: #fff2bd; border-color: #ffd45a; }
+.ihq-tab-btn:hover { border-color: #00e5ff; }
+.ihq-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-right: 4px; }
+.ihq-section-title { color: #fff2bd; font-size: 16px; margin: 4px 0 8px; text-shadow: 1px 1px #07101e; }
+.ihq-hint { font-size: 12px; color: #9fe8ff; margin: 4px 0 10px; line-height: 1.5; }
+.ihq-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.ihq-summary-card { background: rgba(98,65,180,.18); border: 2px solid #8c6ce8; border-radius: 4px; padding: 10px; }
+.ihq-summary-card .num { font-size: 22px; color: #ffe9a8; }
+.ihq-summary-card .label { font-size: 12px; color: #d9ccff; }
+
+/* 服を登録 */
+.ihq-form-row { margin: 8px 0; }
+.ihq-form-row label { display: block; font-size: 12px; color: #9fe8ff; margin-bottom: 3px; }
+.ihq-form-row select, .ihq-form-row input[type="text"] { font-family: 'DotGothic16', monospace; width: 100%; padding: 6px; background: #0b1730; color: #fff; border: 2px solid #2a5c86; border-radius: 3px; font-size: 14px; }
+.ihq-condition-group { display: flex; gap: 6px; }
+.ihq-condition-btn { flex: 1; font-family: 'DotGothic16', monospace; background: #0b1730; color: #9fe8ff; border: 2px solid #2a5c86; padding: 6px; cursor: pointer; border-radius: 3px; }
+.ihq-condition-btn.active { background: #163a63; color: #fff2bd; border-color: #ffd45a; }
+.ihq-photo-box { width: 140px; height: 140px; border: 2px dashed #2a5c86; border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #0b1730; margin-bottom: 8px; }
+.ihq-photo-box img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.ihq-photo-box .ihq-photo-empty { font-size: 11px; color: #5c7a9e; text-align: center; padding: 8px; }
+.ihq-warn { font-size: 12px; color: #ffb066; margin: 6px 0; }
+
+/* カード共通(服一覧・住民一覧) */
+.ihq-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.ihq-card { position: relative; background: rgba(10,20,40,.6); border: 2px solid #2a5c86; border-radius: 4px; padding: 6px; display: flex; flex-direction: column; align-items: center; cursor: pointer; text-align: center; }
+.ihq-card.is-selected { border-color: #ffd45a; box-shadow: 0 0 8px rgba(255,212,90,.5); }
+.ihq-card-img { width: 100%; height: 70px; display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 4px; }
+.ihq-card-img img { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: pixelated; }
+.ihq-card-name { font-size: 11px; color: #fff; line-height: 1.3; }
+.ihq-card-sub { font-size: 10px; color: #9fe8ff; }
+
+/* 相性表示 */
+.ihq-compat-perfect { color: #7cff9a; }
+.ihq-compat-good { color: #ffd45a; }
+.ihq-compat-effort { color: #ff9a6a; }
+
+/* 配送中 */
+.ihq-delivery-card { background: rgba(23,60,140,.25); border: 2px solid #45b8ff; border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+.ihq-wins-track { display: flex; gap: 6px; margin: 8px 0; }
+.ihq-win-pip { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #45b8ff; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+.ihq-win-pip.filled { background: #45b8ff; color: #06101f; }
+
+/* 到着ポップアップ */
+.ihq-arrival-box { max-height: 80vh; overflow-y: auto; }
+.ihq-arrival-portrait { width: 100%; max-width: 220px; height: 200px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; }
+.ihq-arrival-portrait img { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: pixelated; }
+.ihq-arrival-photo { width: 100%; max-width: 160px; height: 120px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; background: #0b1730; border: 2px solid #2a5c86; border-radius: 4px; overflow: hidden; }
+.ihq-arrival-photo img { width: 100%; height: 100%; object-fit: contain; }
+.ihq-stars { font-size: 26px; color: #555; letter-spacing: 3px; text-align: center; margin: 8px 0; }
+.ihq-stars .filled { color: #ffd45a; }
+.ihq-reward-line { text-align: center; font-size: 15px; color: #7cff9a; margin: 6px 0; }
+
+#ui-overlay:has(#inheritance-screen:not(.hidden)) #virtual-dpad {
+  display: none !important;
+}
+
+@media (max-width: 850px) {
+  #inheritance-screen { padding: 8px 10px; font-size: 13px; }
+  #inheritance-screen .pf-header { flex-wrap: wrap; gap: 6px; }
+  #inheritance-screen .pf-title { font-size: 15px; white-space: nowrap; }
+  .ihq-tab-btn { font-size: 10px; padding: 4px 6px; }
+  .ihq-tab-icon { width: 14px; height: 14px; }
+  .ihq-card-grid { grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); }
+  .ihq-photo-box { width: 110px; height: 110px; }
+}

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Z-SAGA: CHRONICLES</title>
-  <link rel="stylesheet" href="style.css?v=20260821s">
+  <link rel="stylesheet" href="style.css?v=20260822b">
   <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -156,6 +156,11 @@
               <button id="btn-list-clothing" class="retro-btn small-btn">現在の服を出品する</button>
             </div>
             <hr>
+            <div class="listing-panel ihq-menu-entry">
+              <p id="ihq-menu-summary">🧵 服の継承：クリックして開く</p>
+              <button id="btn-open-inheritance" class="retro-btn small-btn">服の継承クエストを開く</button>
+            </div>
+            <hr>
             <h3>【仲間になった魔物＆召喚した魂】</h3>
             <ul id="party-list"></ul>
           </div>
@@ -211,6 +216,32 @@
             <div class="pf-detail-col" id="pf-detail-col">
               <div class="pf-detail-empty">キャラをタップすると詳細を確認できます</div>
             </div>
+          </div>
+        </div>
+
+        <!-- 服の継承クエスト -->
+        <div id="inheritance-screen" class="dialog panel-16bit hidden">
+          <div class="pf-header">
+            <h2 class="pf-title">🧵 服の継承クエスト</h2>
+            <button id="btn-close-inheritance" class="retro-btn small-btn">閉じる [Esc]</button>
+          </div>
+          <div class="ihq-tabs" id="ihq-tabs">
+            <button class="ihq-tab-btn active" data-view="menu"><img class="ihq-tab-icon" src="assets/ui/inheritance/circulation_rank.png" alt="">概要</button>
+            <button class="ihq-tab-btn" data-view="register"><img class="ihq-tab-icon" src="assets/ui/inheritance/register_clothes.png" alt="">服を登録</button>
+            <button class="ihq-tab-btn" data-view="request"><img class="ihq-tab-icon" src="assets/ui/inheritance/match_request.png" alt="">継承依頼</button>
+            <button class="ihq-tab-btn" data-view="delivery"><img class="ihq-tab-icon" src="assets/ui/inheritance/in_delivery.png" alt="">配送中</button>
+            <button class="ihq-tab-btn" data-view="history"><img class="ihq-tab-icon" src="assets/ui/inheritance/inheritance_history.png" alt="">継承記録</button>
+            <button class="ihq-tab-btn" data-view="rank"><img class="ihq-tab-icon" src="assets/ui/inheritance/thanks_letter.png" alt="">循環ランク</button>
+          </div>
+          <div class="ihq-content" id="ihq-content"></div>
+        </div>
+
+        <!-- 服の継承: 到着・評価ポップアップ -->
+        <div id="inheritance-arrival-dialog" class="dialog hidden">
+          <div class="paper-texture ihq-arrival-box">
+            <h3><img class="ihq-arrival-title-icon" src="assets/ui/inheritance/arrival_door.png" alt="">継承が届きました</h3>
+            <div id="ihq-arrival-body"></div>
+            <button id="btn-close-inheritance-arrival" class="retro-btn small-btn" style="margin-top:15px;">閉じる</button>
           </div>
         </div>
 
@@ -291,11 +322,11 @@
   </div>
 
   <!-- 背景描画モジュール（差し替え予定）: drawMap(ctx, frame) を提供 -->
-  <script src="background.js?v=20260821s"></script>
+  <script src="background.js?v=20260822b"></script>
   <!-- スプライトエンジン: 外部PNGスプライトシートの読込・アニメーション制御 -->
-  <script src="sprites.js?v=20260821s"></script>
+  <script src="sprites.js?v=20260822b"></script>
   <!-- フィールド拡張: 3ステージの設定値・敵倍率・背景アニメーション・BGM切替フック(データのみ) -->
-  <script src="field-expansion.js?v=20260821s"></script>
-  <script src="main.js?v=20260821s"></script>
+  <script src="field-expansion.js?v=20260822b"></script>
+  <script src="main.js?v=20260822b"></script>
 </body>
 </html>

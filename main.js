@@ -3073,6 +3073,7 @@ function toggleMenu() {
         b.classList.remove('hidden');
         document.getElementById('menu-avatar-name').textContent = `${GameState.avatar.name} (${GameState.avatar.job})`;
         updateListingUI();
+        ihqUpdateMenuSummary();
         const list = document.getElementById('party-list'); list.innerHTML = '';
         if (GameState.party.length === 0) list.innerHTML = '<li>まだ魔物や召喚した魂はありません。</li>';
         GameState.party.forEach(p => {
@@ -3102,6 +3103,471 @@ function toggleMenu() {
     } else { b.classList.add('hidden'); }
 }
 document.getElementById('btn-open-menu').addEventListener('click', toggleMenu); document.getElementById('btn-close-menu').addEventListener('click', toggleMenu);
+
+// ==========================================
+// 服の継承クエスト(追加機能。既存のキャラ・ガチャ・パーティー・戦闘・ステージ・BGM・セーブは変更しない)
+// 「捨てるにはもったいない服」を登録し、必要としている住民を選んで、現在の編成(最大4人)で
+// 既存フィールド・戦闘を使って届けるゲーム内シミュレーション。実際の売買・配送は行わない。
+// ==========================================
+const IHQ_FIELD_MAP = { grassland: 'azurlight', dark_closet: 'wardrobe_gloomwood', washing_underwater: 'laundry_abyss', recovery_room: 'azurlight' };
+const INHERITANCE_RECIPIENTS = [
+    { id: 'rio_meadow_courier', name: '風便りの配達人・リオ', field: 'grassland', portrait: 'assets/npcs/recipients/01_rio_meadow_courier.png', wanted: { category: ['jacket', 'shirt'], colors: ['green', 'beige'], seasons: ['spring', 'autumn'], minCondition: 2 }, request: '草原を走っても動きやすい上着を探しています。', thanks: 'この服なら、遠い村へも風のように届けに行けます！', baseRewardG: 90, circulationPoints: 18 },
+    { id: 'marta_flower_gardener', name: '花園の庭師・マルタ', field: 'grassland', portrait: 'assets/npcs/recipients/02_marta_flower_gardener.png', wanted: { category: ['cardigan', 'coat'], colors: ['pink', 'purple', 'brown'], seasons: ['autumn', 'winter'], minCondition: 1 }, request: '朝露の冷えから守ってくれる、暖かな羽織りが欲しいの。', thanks: '大切に着ますね。次の花が咲いたら、あなたにも見せたいわ。', baseRewardG: 100, circulationPoints: 20 },
+    { id: 'noa_closet_librarian', name: '夜森の司書・ノア', field: 'dark_closet', portrait: 'assets/npcs/recipients/03_noa_closet_librarian.png', wanted: { category: ['coat', 'jacket'], colors: ['black', 'navy', 'gray'], seasons: ['autumn', 'winter'], minCondition: 2 }, request: '冷たいクローゼットの奥で本を守れる、暗色の上着を。', thanks: '服に残った記憶も、物語と一緒に大切に保管します。', baseRewardG: 130, circulationPoints: 25 },
+    { id: 'myu_moon_tailor', name: '月糸の仕立屋・ミュウ', field: 'dark_closet', portrait: 'assets/npcs/recipients/04_myu_moon_tailor.png', wanted: { category: ['cape', 'dress', 'cardigan'], colors: ['purple', 'white', 'blue'], seasons: ['spring', 'autumn'], minCondition: 1 }, request: '少し傷んでいても平気。月糸で直せる布を探しています。', thanks: 'ほつれを直したら、この服はもう一度きらめきました。', baseRewardG: 145, circulationPoints: 28 },
+    { id: 'nejika_washer_engineer', name: '泡機関士・ネジカ', field: 'washing_underwater', portrait: 'assets/npcs/recipients/05_nejika_washer_engineer.png', wanted: { category: ['overalls', 'pants', 'shirt'], colors: ['blue', 'white'], seasons: ['spring', 'summer'], minCondition: 1 }, request: '泡まみれの作業でも動ける丈夫な服が必要なんだ。', thanks: '修理も洗濯も完了！ この服、まだまだ働けるよ。', baseRewardG: 170, circulationPoints: 32 },
+    { id: 'seren_water_musician', name: '水奏士・セレン', field: 'washing_underwater', portrait: 'assets/npcs/recipients/06_seren_water_musician.png', wanted: { category: ['dress', 'shirt', 'cape'], colors: ['blue', 'aqua', 'white'], seasons: ['spring', 'summer'], minCondition: 2 }, request: '水の舞台で揺れる、青い衣装を探しています。', thanks: '布が水音をまとい、新しい旋律が生まれました。', baseRewardG: 190, circulationPoints: 36 },
+    { id: 'emma_recovery_healer', name: '白綿の癒し手・エマ', field: 'recovery_room', portrait: 'assets/npcs/recipients/07_emma_recovery_healer.png', wanted: { category: ['shirt', 'robe', 'cardigan'], colors: ['white', 'green', 'beige'], seasons: ['all'], minCondition: 2 }, request: '回復の間で使える、清潔で柔らかな服をお願いします。', thanks: 'やさしい着心地です。この服で旅人をもっと癒せます。', baseRewardG: 120, circulationPoints: 24 },
+    { id: 'towa_traveling_child', name: '旅路の子・トワ', field: 'grassland', portrait: 'assets/npcs/recipients/08_towa_traveling_child.png', wanted: { category: ['hoodie', 'coat', 'pants'], colors: ['brown', 'yellow', 'red'], seasons: ['autumn', 'winter'], minCondition: 1 }, request: '長い旅に耐えられる服なら、古くても大歓迎！', thanks: 'これで次の町まで歩けるよ。僕が大きくなるまで大事にする！', baseRewardG: 110, circulationPoints: 22 }
+];
+const IHQ_CATEGORY_LABELS = { jacket: '上着', shirt: 'シャツ', cardigan: 'カーディガン', coat: 'コート', cape: 'マント', dress: 'ワンピース', overalls: 'オーバーオール', pants: 'パンツ', robe: 'ローブ', hoodie: 'パーカー' };
+const IHQ_COLOR_LABELS = { green: '緑', beige: 'ベージュ', pink: 'ピンク', purple: '紫', brown: '茶', black: '黒', navy: '紺', gray: '灰', white: '白', blue: '青', aqua: '水色', yellow: '黄', red: '赤' };
+const IHQ_SEASON_LABELS = { spring: '春', summer: '夏', autumn: '秋', winter: '冬' };
+const IHQ_CIRCULATION_THRESHOLDS = [0, 100, 260, 520, 900, 1400];
+const IHQ_RANK_NAMES = ['見習い縫い手', '街の届け人', '循環の仕立て人', '巡りの仕立て師', '継承の織り手', '伝説の循環者'];
+
+let InheritanceState = { clothes: [], missions: [], history: [], circulationPoints: 0 };
+const IHQ_CLOTHES_KEY = 'zsaga_inheritance_clothes_v1';
+const IHQ_MISSIONS_KEY = 'zsaga_inheritance_missions_v1';
+const IHQ_HISTORY_KEY = 'zsaga_inheritance_history_v1';
+const IHQ_POINTS_KEY = 'zsaga_circulation_points_v1';
+function saveInheritanceClothes() { try { localStorage.setItem(IHQ_CLOTHES_KEY, JSON.stringify(InheritanceState.clothes)); } catch (e) { /* 保存できない環境では無視 */ } }
+function loadInheritanceClothes() { try { const raw = localStorage.getItem(IHQ_CLOTHES_KEY); const parsed = raw ? JSON.parse(raw) : null; InheritanceState.clothes = Array.isArray(parsed) ? parsed : []; } catch (e) { InheritanceState.clothes = []; } }
+function saveInheritanceMissions() { try { localStorage.setItem(IHQ_MISSIONS_KEY, JSON.stringify(InheritanceState.missions)); } catch (e) { /* 保存できない環境では無視 */ } }
+function loadInheritanceMissions() { try { const raw = localStorage.getItem(IHQ_MISSIONS_KEY); const parsed = raw ? JSON.parse(raw) : null; InheritanceState.missions = Array.isArray(parsed) ? parsed : []; } catch (e) { InheritanceState.missions = []; } }
+function saveInheritanceHistory() { try { localStorage.setItem(IHQ_HISTORY_KEY, JSON.stringify(InheritanceState.history)); } catch (e) { /* 保存できない環境では無視 */ } }
+function loadInheritanceHistory() { try { const raw = localStorage.getItem(IHQ_HISTORY_KEY); const parsed = raw ? JSON.parse(raw) : null; InheritanceState.history = Array.isArray(parsed) ? parsed : []; } catch (e) { InheritanceState.history = []; } }
+function saveCirculationPoints() { try { localStorage.setItem(IHQ_POINTS_KEY, JSON.stringify(InheritanceState.circulationPoints)); } catch (e) { /* 保存できない環境では無視 */ } }
+function loadCirculationPoints() { try { const raw = localStorage.getItem(IHQ_POINTS_KEY); const parsed = raw ? JSON.parse(raw) : 0; InheritanceState.circulationPoints = typeof parsed === 'number' ? parsed : 0; } catch (e) { InheritanceState.circulationPoints = 0; } }
+loadInheritanceClothes(); loadInheritanceMissions(); loadInheritanceHistory(); loadCirculationPoints();
+
+let isInheritanceOpen = false;
+let inheritanceView = 'menu';
+let ihqPendingPhoto = null; // { dataUrl } 登録フォームで選択中・まだ保存していない写真
+let ihqSelectedClothingId = null;
+let ihqSelectedRecipientId = null;
+let ihqSelectedCondition = 2;
+
+function ihqActiveMission() { return InheritanceState.missions.find(m => m.status === 'in_progress' || m.status === 'suspended') || null; }
+function ihqRecipientById(id) { return INHERITANCE_RECIPIENTS.find(r => r.id === id) || null; }
+function ihqClothingById(id) { return InheritanceState.clothes.find(c => c.id === id) || null; }
+function ihqFieldUnlocked(recipientField) {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const realId = IHQ_FIELD_MAP[recipientField] || 'azurlight';
+    const field = fx && fx.fields[realId];
+    if (!field) return true;
+    return !field.unlockAfter || !!GameState.worldProgress.defeatedBosses[field.unlockAfter];
+}
+function ihqCirculationRank() {
+    let idx = 0;
+    for (let i = 0; i < IHQ_CIRCULATION_THRESHOLDS.length; i++) { if (InheritanceState.circulationPoints >= IHQ_CIRCULATION_THRESHOLDS[i]) idx = i; }
+    return idx;
+}
+
+// 相性算出: 種類40点・色25点・季節20点・状態15点の100点満点
+function computeInheritanceCompatibility(clothing, recipient) {
+    let score = 0;
+    if (recipient.wanted.category.includes(clothing.category)) score += 40;
+    if (recipient.wanted.colors.includes(clothing.color)) score += 25;
+    if (recipient.wanted.seasons.includes(clothing.season) || recipient.wanted.seasons.includes('all')) score += 20;
+    if (clothing.condition >= recipient.wanted.minCondition) score += 15;
+    else score += Math.round(15 * (clothing.condition / recipient.wanted.minCondition));
+    let tier = 'effort', tierLabel = '工夫すれば渡せる', tierClass = 'ihq-compat-effort';
+    if (score >= 75) { tier = 'perfect'; tierLabel = 'ぴったり'; tierClass = 'ihq-compat-perfect'; }
+    else if (score >= 45) { tier = 'good'; tierLabel = 'おすすめ'; tierClass = 'ihq-compat-good'; }
+    return { score, tier, tierLabel, tierClass };
+}
+
+function ihqUpdateMenuSummary() {
+    const el = document.getElementById('ihq-menu-summary');
+    if (!el) return;
+    const active = ihqActiveMission();
+    el.textContent = active
+        ? `🧵 服の継承：配送中のクエストがあります(${active.winsSoFar}/${active.winsNeeded}勝)`
+        : `🧵 服の継承：登録済み${InheritanceState.clothes.length}着 / 循環${InheritanceState.circulationPoints}pt`;
+}
+
+function openInheritanceScreen() {
+    if (isBattling || isShopOpen || isFashionShow || isPartyFormationOpen) return;
+    playSound('select');
+    document.getElementById('status-menu').classList.add('hidden');
+    document.getElementById('inheritance-screen').classList.remove('hidden');
+    isInheritanceOpen = true;
+    inheritanceView = 'menu';
+    renderInheritanceScreen();
+}
+function closeInheritanceScreen() {
+    playSound('select');
+    document.getElementById('inheritance-screen').classList.add('hidden');
+    isInheritanceOpen = false;
+    if (isMenuOpen) document.getElementById('status-menu').classList.remove('hidden');
+}
+document.getElementById('btn-open-inheritance').addEventListener('click', openInheritanceScreen);
+document.getElementById('btn-close-inheritance').addEventListener('click', closeInheritanceScreen);
+document.getElementById('ihq-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('.ihq-tab-btn');
+    if (!btn) return;
+    playSound('select');
+    inheritanceView = btn.dataset.view;
+    ihqSelectedClothingId = null; ihqSelectedRecipientId = null;
+    renderInheritanceScreen();
+});
+
+function renderInheritanceScreen() {
+    document.querySelectorAll('.ihq-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.view === inheritanceView));
+    const content = document.getElementById('ihq-content');
+    if (inheritanceView === 'register') content.innerHTML = ihqRenderRegisterHtml();
+    else if (inheritanceView === 'request') content.innerHTML = ihqRenderRequestHtml();
+    else if (inheritanceView === 'delivery') content.innerHTML = ihqRenderDeliveryHtml();
+    else if (inheritanceView === 'history') content.innerHTML = ihqRenderHistoryHtml();
+    else if (inheritanceView === 'rank') content.innerHTML = ihqRenderRankHtml();
+    else content.innerHTML = ihqRenderMenuHtml();
+    ihqWireContentEvents();
+}
+
+function ihqRenderMenuHtml() {
+    const active = ihqActiveMission();
+    return `
+      <p class="ihq-section-title">🏠 概要</p>
+      <p class="ihq-hint">不要になった服を登録し、必要としている住民を選んで、今のパーティーで届けます。実際の売買や住所交換は行いません。</p>
+      <div class="ihq-summary-grid">
+        <div class="ihq-summary-card"><div class="num">${InheritanceState.clothes.length}</div><div class="label">登録済みの服</div></div>
+        <div class="ihq-summary-card"><div class="num">${active ? '1' : '0'}</div><div class="label">配送中のクエスト</div></div>
+        <div class="ihq-summary-card"><div class="num">${InheritanceState.history.length}</div><div class="label">継承した回数</div></div>
+        <div class="ihq-summary-card"><div class="num">${InheritanceState.circulationPoints}</div><div class="label">循環ポイント</div></div>
+      </div>
+      ${active ? `<p class="ihq-hint">▶ 「🚚 配送中」タブから、進行中のクエストを確認できます。</p>` : `<p class="ihq-hint">▶ まずは「📷 服を登録」から始めましょう。</p>`}
+    `;
+}
+
+function ihqRenderRegisterHtml() {
+    const photoHtml = ihqPendingPhoto
+        ? `<img src="${ihqPendingPhoto.dataUrl}" alt="登録する服の写真">`
+        : `<span class="ihq-photo-empty">写真を選ぶと<br>ここに表示されます<br>(写真なしでも登録できます)</span>`;
+    const catOptions = Object.keys(IHQ_CATEGORY_LABELS).map(k => `<option value="${k}">${IHQ_CATEGORY_LABELS[k]}</option>`).join('');
+    const colorOptions = Object.keys(IHQ_COLOR_LABELS).map(k => `<option value="${k}">${IHQ_COLOR_LABELS[k]}</option>`).join('');
+    const seasonOptions = Object.keys(IHQ_SEASON_LABELS).map(k => `<option value="${k}">${IHQ_SEASON_LABELS[k]}</option>`).join('');
+    return `
+      <p class="ihq-section-title">📷 服を登録</p>
+      <div class="ihq-photo-box" id="ihq-photo-box">${photoHtml}</div>
+      <input type="file" accept="image/*" id="ihq-photo-input" style="font-size:12px; color:#9fe8ff; margin-bottom:8px;">
+      <div id="ihq-photo-warn"></div>
+      <div class="ihq-form-row"><label>服の種類</label><select id="ihq-input-category">${catOptions}</select></div>
+      <div class="ihq-form-row"><label>色</label><select id="ihq-input-color">${colorOptions}</select></div>
+      <div class="ihq-form-row"><label>季節</label><select id="ihq-input-season">${seasonOptions}</select></div>
+      <div class="ihq-form-row"><label>状態</label>
+        <div class="ihq-condition-group" id="ihq-condition-group">
+          <button type="button" class="ihq-condition-btn${ihqSelectedCondition === 1 ? ' active' : ''}" data-cond="1">1:傷みあり</button>
+          <button type="button" class="ihq-condition-btn${ihqSelectedCondition === 2 ? ' active' : ''}" data-cond="2">2:普通</button>
+          <button type="button" class="ihq-condition-btn${ihqSelectedCondition === 3 ? ' active' : ''}" data-cond="3">3:きれい</button>
+        </div>
+      </div>
+      <div class="ihq-form-row"><label>思い出メモ(任意)</label><input type="text" id="ihq-input-memo" maxlength="60" placeholder="例: 初めて買ってもらった上着"></div>
+      <button id="btn-submit-clothing" class="retro-btn small-btn" style="margin-top:8px;">この服を登録する</button>
+    `;
+}
+
+function ihqRenderRequestHtml() {
+    const activeMission = ihqActiveMission();
+    if (activeMission) {
+        return `<p class="ihq-section-title">💌 継承依頼</p><p class="ihq-hint">配送中のクエストがあります。先に「🚚 配送中」タブから完了・中断分の確認をしてください。</p>`;
+    }
+    // 完了済みミッションで使った服だけを除外する(進行中・中断中はここに来る時点で存在しないため考慮不要)
+    const usedClothingIds = new Set(InheritanceState.missions.filter(m => m.status === 'completed').map(m => m.clothingId));
+    const freeClothes = InheritanceState.clothes.filter(c => !usedClothingIds.has(c.id));
+    const unlockedRecipients = INHERITANCE_RECIPIENTS.filter(r => ihqFieldUnlocked(r.field));
+    if (freeClothes.length === 0) {
+        const msg = InheritanceState.clothes.length === 0
+            ? 'まだ服が登録されていません。「📷 服を登録」から追加してください。'
+            : '登録済みの服はすべて継承済みです。「📷 服を登録」から新しい服を追加してください。';
+        return `<p class="ihq-section-title">💌 継承依頼</p><p class="ihq-hint">${msg}</p>`;
+    }
+    const clothesCards = freeClothes.map(c => `
+      <div class="ihq-card${ihqSelectedClothingId === c.id ? ' is-selected' : ''}" data-clothing-id="${c.id}">
+        <div class="ihq-card-img">${c.photo ? `<img src="${c.photo}" alt="服">` : '👕'}</div>
+        <div class="ihq-card-name">${IHQ_CATEGORY_LABELS[c.category] || c.category}</div>
+        <div class="ihq-card-sub">${IHQ_COLOR_LABELS[c.color] || c.color} / ${IHQ_SEASON_LABELS[c.season] || c.season} / 状態${c.condition}</div>
+      </div>`).join('');
+    const recipientCards = unlockedRecipients.map(r => `
+      <div class="ihq-card${ihqSelectedRecipientId === r.id ? ' is-selected' : ''}" data-recipient-id="${r.id}">
+        <div class="ihq-card-img"><img src="${r.portrait}" alt="${r.name}"></div>
+        <div class="ihq-card-name">${r.name}</div>
+      </div>`).join('');
+    let compatHtml = '';
+    if (ihqSelectedClothingId && ihqSelectedRecipientId) {
+        const c = ihqClothingById(ihqSelectedClothingId), r = ihqRecipientById(ihqSelectedRecipientId);
+        if (c && r) {
+            const compat = computeInheritanceCompatibility(c, r);
+            compatHtml = `
+              <div class="ihq-delivery-card">
+                <p>「${r.name}」の依頼：${r.request}</p>
+                <p class="${compat.tierClass}">相性：${compat.tierLabel}(${compat.score}点)</p>
+                <button id="btn-start-inheritance-delivery" class="retro-btn small-btn">届ける</button>
+              </div>`;
+        }
+    }
+    return `
+      <p class="ihq-section-title">💌 継承依頼</p>
+      <p class="ihq-hint">届けたい服と、住民を1組ずつ選んでください(住民は到達済みのフィールドの分だけ表示されます)。</p>
+      <p class="ihq-hint">🧥 服を選ぶ</p>
+      <div class="ihq-card-grid">${clothesCards}</div>
+      <p class="ihq-hint" style="margin-top:10px;">🏠 届け先を選ぶ</p>
+      <div class="ihq-card-grid">${recipientCards}</div>
+      ${compatHtml}
+    `;
+}
+
+function ihqRenderDeliveryHtml() {
+    const mission = ihqActiveMission();
+    if (!mission) {
+        return `<p class="ihq-section-title">🚚 配送中</p><p class="ihq-hint">現在、配送中のクエストはありません。「💌 継承依頼」から新しく始められます。</p>`;
+    }
+    const recipient = ihqRecipientById(mission.recipientId);
+    const clothing = ihqClothingById(mission.clothingId);
+    const pips = Array.from({ length: mission.winsNeeded }, (_, i) => `<div class="ihq-win-pip${i < mission.winsSoFar ? ' filled' : ''}">${i < mission.winsSoFar ? '✓' : ''}</div>`).join('');
+    const canWash = clothing && clothing.condition === 1 && !mission.washed && isInLaundryPlaza;
+    const washHtml = clothing && clothing.condition === 1
+        ? (mission.washed
+            ? `<p class="ihq-hint">✨ 洗濯・修復ずみ(評価+10)</p>`
+            : canWash
+                ? `<button id="btn-wash-inheritance" class="retro-btn small-btn"><img class="ihq-tab-icon" src="assets/ui/inheritance/wash_repair.png" alt="">泡織りの洗濯広場で洗濯・修復する(20G)</button>`
+                : `<p class="ihq-hint">💡 状態1の服は、泡織りの洗濯広場で洗濯・修復すると評価が上がります。</p>`)
+        : '';
+    return `
+      <p class="ihq-section-title">🚚 配送中</p>
+      <div class="ihq-delivery-card">
+        <p>${recipient ? recipient.name : '???'} へ ${clothing ? (IHQ_CATEGORY_LABELS[clothing.category] || clothing.category) : '服'} を届けています。</p>
+        <p class="ihq-hint">${mission.status === 'suspended' ? '⚠️ 前回の冒険で力尽き、配送は中断中です。戦って再開しましょう。' : '道中の敵を倒すと配送が進みます。'}</p>
+        <div class="ihq-wins-track">${pips}</div>
+        <p>${mission.winsSoFar} / ${mission.winsNeeded} 勝</p>
+        ${washHtml}
+      </div>
+    `;
+}
+
+function ihqRenderHistoryHtml() {
+    if (InheritanceState.history.length === 0) {
+        return `<p class="ihq-section-title">📖 継承記録</p><p class="ihq-hint">まだ継承の記録がありません。</p>`;
+    }
+    const rows = InheritanceState.history.slice().reverse().map(h => {
+        const recipient = ihqRecipientById(h.recipientId);
+        const starHtml = `<span class="ihq-stars" style="font-size:14px;">${'★'.repeat(h.stars)}${'☆'.repeat(5 - h.stars)}</span>`;
+        return `<div class="ihq-delivery-card"><p>${recipient ? recipient.name : '???'} ${starHtml}</p><p class="ihq-hint">報酬 ${h.rewardG} G / 循環+${h.circulationPoints}</p></div>`;
+    }).join('');
+    return `<p class="ihq-section-title">📖 継承記録</p>${rows}`;
+}
+
+function ihqRenderRankHtml() {
+    const rankIdx = ihqCirculationRank();
+    const nextThreshold = IHQ_CIRCULATION_THRESHOLDS[rankIdx + 1];
+    const progressHtml = nextThreshold
+        ? `<p class="ihq-hint">次のランクまであと ${nextThreshold - InheritanceState.circulationPoints} ポイント</p>`
+        : `<p class="ihq-hint">最高ランクに到達しました！</p>`;
+    return `
+      <p class="ihq-section-title">🎖️ 循環ランク</p>
+      <div class="ihq-summary-card">
+        <div class="num">${IHQ_RANK_NAMES[rankIdx]}</div>
+        <div class="label">循環ポイント: ${InheritanceState.circulationPoints}</div>
+      </div>
+      ${progressHtml}
+      <p class="ihq-hint">循環ランクは称号と依頼解放の目安です。既存のプレイヤーレベルやボス挑戦条件には影響しません。</p>
+    `;
+}
+
+function ihqWireContentEvents() {
+    const submitBtn = document.getElementById('btn-submit-clothing');
+    if (submitBtn) submitBtn.addEventListener('click', ihqSubmitClothingRegistration);
+    const photoInput = document.getElementById('ihq-photo-input');
+    if (photoInput) photoInput.addEventListener('change', ihqHandlePhotoSelected);
+    const condGroup = document.getElementById('ihq-condition-group');
+    if (condGroup) condGroup.addEventListener('click', (e) => {
+        const btn = e.target.closest('.ihq-condition-btn');
+        if (!btn) return;
+        ihqSelectedCondition = parseInt(btn.dataset.cond, 10);
+        renderInheritanceScreen();
+    });
+    document.querySelectorAll('[data-clothing-id]').forEach(card => card.addEventListener('click', () => {
+        ihqSelectedClothingId = card.dataset.clothingId;
+        renderInheritanceScreen();
+    }));
+    document.querySelectorAll('[data-recipient-id]').forEach(card => card.addEventListener('click', () => {
+        ihqSelectedRecipientId = card.dataset.recipientId;
+        renderInheritanceScreen();
+    }));
+    const startBtn = document.getElementById('btn-start-inheritance-delivery');
+    if (startBtn) startBtn.addEventListener('click', ihqStartDelivery);
+    const washBtn = document.getElementById('btn-wash-inheritance');
+    if (washBtn) washBtn.addEventListener('click', ihqWashRepair);
+}
+
+// 写真: 端末内で長辺512px以下へ圧縮し、外部へは一切送信しない。EXIF回転はcanvas描画時に
+// ブラウザが自動で反映する(現行ブラウザの既定挙動)。
+function ihqHandlePhotoSelected(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const warnEl = document.getElementById('ihq-photo-warn');
+    if (warnEl) warnEl.innerHTML = '';
+    const reader = new FileReader();
+    reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+            const maxSide = 512;
+            let { width, height } = img;
+            if (width > height && width > maxSide) { height = Math.round(height * maxSide / width); width = maxSide; }
+            else if (height > maxSide) { width = Math.round(width * maxSide / height); height = maxSide; }
+            const canvas = document.createElement('canvas');
+            canvas.width = width; canvas.height = height;
+            const cctx = canvas.getContext('2d');
+            cctx.drawImage(img, 0, 0, width, height);
+            let dataUrl;
+            try { dataUrl = canvas.toDataURL('image/webp', 0.72); } catch (err) { dataUrl = null; }
+            if (!dataUrl || dataUrl.indexOf('data:image/webp') !== 0) dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+            ihqPendingPhoto = { dataUrl };
+            renderInheritanceScreen();
+        };
+        img.onerror = () => { if (warnEl) warnEl.innerHTML = '<p class="ihq-warn">画像を読み込めませんでした。別の写真をお試しください。</p>'; };
+        img.src = reader.result;
+    };
+    reader.onerror = () => { if (warnEl) warnEl.innerHTML = '<p class="ihq-warn">画像を読み込めませんでした。</p>'; };
+    reader.readAsDataURL(file);
+}
+
+function ihqSubmitClothingRegistration() {
+    const category = document.getElementById('ihq-input-category').value;
+    const color = document.getElementById('ihq-input-color').value;
+    const season = document.getElementById('ihq-input-season').value;
+    const memo = document.getElementById('ihq-input-memo').value.slice(0, 60);
+    const clothing = {
+        id: 'cloth_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+        category, color, season, condition: ihqSelectedCondition, memo,
+        photo: ihqPendingPhoto ? ihqPendingPhoto.dataUrl : null,
+        registeredAt: Date.now()
+    };
+    InheritanceState.clothes.push(clothing);
+    try {
+        saveInheritanceClothes();
+    } catch (e) {
+        // 容量不足など: 写真なしで再保存を試みる(ゲーム全体を壊さない)
+        clothing.photo = null;
+        InheritanceState.clothes[InheritanceState.clothes.length - 1] = clothing;
+        try { saveInheritanceClothes(); } catch (e2) { /* それでも失敗した場合はメモリ上にのみ残す */ }
+        const warnEl = document.getElementById('ihq-photo-warn');
+        if (warnEl) warnEl.innerHTML = '<p class="ihq-warn">保存容量が不足していたため、写真なしで登録しました。</p>';
+    }
+    ihqPendingPhoto = null;
+    playSound('select');
+    inheritanceView = 'request';
+    renderInheritanceScreen();
+}
+
+function ihqStartDelivery() {
+    if (!ihqSelectedClothingId || !ihqSelectedRecipientId) return;
+    if (ihqActiveMission()) return;
+    const recipient = ihqRecipientById(ihqSelectedRecipientId);
+    const clothing = ihqClothingById(ihqSelectedClothingId);
+    if (!recipient || !clothing) return;
+    const compat = computeInheritanceCompatibility(clothing, recipient);
+    const mission = {
+        id: 'mission_' + Date.now(),
+        recipientId: recipient.id, clothingId: clothing.id,
+        status: 'in_progress', winsNeeded: 3, winsSoFar: 0,
+        fieldId: IHQ_FIELD_MAP[recipient.field] || 'azurlight',
+        score: compat.score, washed: false, hadLoss: false,
+        startedAt: Date.now()
+    };
+    InheritanceState.missions.push(mission);
+    saveInheritanceMissions();
+    ihqSelectedClothingId = null; ihqSelectedRecipientId = null;
+    closeInheritanceScreen();
+    if (isMenuOpen) toggleMenu();
+    if (GameState.currentFieldId !== mission.fieldId && !isInLaundryPlaza) changeField(mission.fieldId);
+    else if (isInLaundryPlaza) exitLaundryPlaza();
+    showTransientFieldMessage(`🚚 ${recipient.name}への配送クエスト開始！ 3勝で到着します。`, 3500);
+}
+
+function ihqWashRepair() {
+    const mission = ihqActiveMission();
+    if (!mission || mission.washed) return;
+    if (GameState.gold < 20) { showTransientFieldMessage('Gが足りません(20G必要)…'); return; }
+    updateGold(-20);
+    mission.washed = true;
+    saveInheritanceMissions();
+    playSound('crystal');
+    renderInheritanceScreen();
+}
+
+// 星1〜5への変換とG換算。既存の所持Gへ加算するだけで、別のG項目は作らない。
+function ihqStarsFromScore(score) {
+    if (score >= 90) return 5;
+    if (score >= 75) return 4;
+    if (score >= 55) return 3;
+    if (score >= 35) return 2;
+    return 1;
+}
+const IHQ_STAR_REWARD_MULTI = { 5: 1.5, 4: 1.2, 3: 1.0, 2: 0.8, 1: 0.6 };
+
+function ihqCompleteDelivery(mission) {
+    const recipient = ihqRecipientById(mission.recipientId);
+    const clothing = ihqClothingById(mission.clothingId);
+    if (!recipient) return;
+    let finalScore = mission.score;
+    if (mission.washed) finalScore += 10;
+    if (!mission.hadLoss) finalScore += 5;
+    finalScore = Math.min(100, finalScore);
+    const stars = ihqStarsFromScore(finalScore);
+    const rewardG = Math.round(recipient.baseRewardG * (IHQ_STAR_REWARD_MULTI[stars] || 1));
+    updateGold(rewardG);
+    InheritanceState.circulationPoints += recipient.circulationPoints;
+    saveCirculationPoints();
+    mission.status = 'completed';
+    mission.completedAt = Date.now();
+    saveInheritanceMissions();
+    InheritanceState.history.push({ id: mission.id, recipientId: recipient.id, clothingId: mission.clothingId, stars, rewardG, circulationPoints: recipient.circulationPoints, completedAt: Date.now() });
+    saveInheritanceHistory();
+    ihqShowArrivalPopup(recipient, clothing, stars, rewardG);
+}
+
+function ihqShowArrivalPopup(recipient, clothing, stars, rewardG) {
+    const dialog = document.getElementById('inheritance-arrival-dialog');
+    const body = document.getElementById('ihq-arrival-body');
+    const starsHtml = `<div class="ihq-stars">${Array.from({ length: 5 }, (_, i) => `<span class="${i < stars ? 'filled' : ''}">★</span>`).join('')}</div>`;
+    body.innerHTML = `
+      <div class="ihq-arrival-portrait"><img src="${recipient.portrait}" alt="${recipient.name}"></div>
+      ${clothing && clothing.photo ? `<div class="ihq-arrival-photo"><img src="${clothing.photo}" alt="届けた服"></div>` : ''}
+      <p>${recipient.name}</p>
+      <p class="ihq-hint">「${recipient.request}」</p>
+      ${starsHtml}
+      <p>${recipient.thanks}</p>
+      <p class="ihq-reward-line">報酬 +${rewardG} G ／ 循環+${recipient.circulationPoints}</p>
+    `;
+    playSound('crystal'); playHealFanfare();
+    dialog.classList.remove('hidden');
+}
+document.getElementById('btn-close-inheritance-arrival').addEventListener('click', () => {
+    document.getElementById('inheritance-arrival-dialog').classList.add('hidden');
+});
+
+// 戦闘勝利のたびに呼ばれる(triggerCirculation内フック)。配送中のクエストがあれば1勝進める。
+function ihqHandleBattleWin() {
+    const mission = ihqActiveMission();
+    if (!mission) return;
+    mission.status = 'in_progress';
+    mission.winsSoFar++;
+    saveInheritanceMissions();
+    if (mission.winsSoFar >= mission.winsNeeded) {
+        setTimeout(() => ihqCompleteDelivery(mission), 4200);
+    } else {
+        showTransientFieldMessage(`🚚 配送クエスト進行中… (${mission.winsSoFar}/${mission.winsNeeded}勝)`, 3000);
+    }
+}
+// ゲームオーバー時に呼ばれる(triggerGameOverフック)。クエストは消さず「中断」にする。
+function ihqHandleGameOver() {
+    const mission = ihqActiveMission();
+    if (!mission) return;
+    mission.status = 'suspended';
+    mission.hadLoss = true;
+    saveInheritanceMissions();
+}
 
 // ==========================================
 // フィールド拡張: 仕立工房（Gで仲間を1レベル上げる。重複強化のLvと同じ数値を共有する）
@@ -3225,8 +3691,9 @@ window.addEventListener('keydown', e => {
     // 冒険開始前(祭壇/タイトル画面)ではショートカットを無効にする。
     // 特にG(召喚)は画面が隠れたまま裏で召喚BGMだけが鳴り続けてしまうバグの原因だった。
     if (!gameLoopId) return;
-    if (!isMenuOpen && !isShopOpen && !isFashionShow && !isGameOver) keys[e.key] = true;
+    if (!isMenuOpen && !isShopOpen && !isFashionShow && !isGameOver && !isInheritanceOpen) keys[e.key] = true;
     if (isGameOver) return; // ゲームオーバー・回復の間ではメニュー等のショートカットも無効にする
+    if (isInheritanceOpen) { if (e.key === 'Escape') closeInheritanceScreen(); return; } // 服の継承クエスト画面中は他のショートカットを無効にする
     if ((e.key === 'm' || e.key === 'M') && !isShopOpen && !isPartyFormationOpen) toggleMenu();
     if (e.key === 'g' || e.key === 'G') openShopDirect();
     if (e.key === 'f' || e.key === 'F') openFieldTravel();
@@ -3593,6 +4060,7 @@ function isPartyWiped() {
 function triggerGameOver(reason) {
     if (isGameOver) return; // 二重発動防止
     isGameOver = true;
+    ihqHandleGameOver(); // 服の継承クエスト: 配送中なら失わず「中断」にする
     isBattling = false; currentEnemy = null; battleViewState = 'idle'; activeFighter = null;
     battleDlg.classList.add('hidden');
     stopBGM(); // 戦闘BGMを止める(重複再生防止。回復の間・復帰後の再生は別途行う)
@@ -4083,6 +4551,7 @@ function triggerCirculation() {
     // 泡織りの洗濯広場: 敵の種類を問わず、勝利のたびに通算勝利数を1つ加算する(洗剤の泡の復活条件に使う)
     GameState.worldProgress.laundry.totalWins++;
     saveWorldProgress();
+    ihqHandleBattleWin(); // 服の継承クエスト: 配送中なら1勝進める(既存の勝利処理・報酬計算には影響しない)
 
     // フィールド拡張: フィールド固有ボス以外の撃破だけをボスゲート討伐数に加算する
     if (currentEnemy && !currentEnemy.isFieldBoss) {
