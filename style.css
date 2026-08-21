@@ -108,8 +108,8 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .hp-bar-bg { width: 200px; height: 12px; background: #550000; border: 2px solid #fff; position: relative; }
 .hp-bar-fill { height: 100%; background: #00ff00; width: 100%; transition: width 0.3s cubic-bezier(0.1, 0.7, 1.0, 0.1); }
 
-/* 戦闘HUD: 勇者のHP/MPバー */
-#battle-hud { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
+/* 戦闘HUD: 編成順のパーティー全員(勇者含む)のHPを1人1行で並べる */
+#battle-hud { display: flex; flex-direction: column; align-items: stretch; gap: 3px; margin-bottom: 10px; font-size: 13px; }
 #battle-hud .hud-label { color: #fff; margin-right: 2px; }
 .hud-bar-bg { width: 90px; height: 10px; border: 2px solid #fff; position: relative; }
 .hud-bar-bg.hp { background: #400; }
@@ -132,16 +132,21 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
   transform: none; background: none; border: none; box-shadow: none; padding: 0;
   pointer-events: none;
 }
-#battle-dialog #battle-hud {
+/* 戦闘上部HUD(HUD・敵名・敵HP)をまとめて1つの枠として上端に固定する。
+   HUDの人数(最大4人・勇者含む)で高さが変わるため、個々を固定pxで別々に置かず、
+   この枠の中でflex-columnで自然に積む(既存の見た目・色・フォントは変更しない)。 */
+#battle-dialog #battle-top-hud {
   position: absolute; top: 76px; left: 50%; transform: translateX(-50%);
-  margin-bottom: 0; padding: 4px 10px; background: rgba(3,8,31,.85); border: 2px solid #6fb8e0; border-radius: 3px;
+  width: 92%; display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+#battle-dialog #battle-hud {
+  width: auto; max-width: 100%;
+  padding: 4px 10px; background: rgba(3,8,31,.85); border: 2px solid #6fb8e0; border-radius: 3px;
 }
 #battle-dialog #battle-monster-name {
-  position: absolute; top: 106px; left: 50%; transform: translateX(-50%);
-  width: 92%; margin-bottom: 0; font-size: 15px; line-height: 1.3;
+  width: 100%; margin-bottom: 0; font-size: 15px; line-height: 1.3;
 }
 #battle-dialog .enemy-hp-container {
-  position: absolute; top: 144px; left: 50%; transform: translateX(-50%);
   margin-bottom: 0;
 }
 #battle-dialog #battle-msg {
@@ -149,24 +154,30 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
   margin: 0; font-size: 14px; line-height: 1.3; max-height: 54px; overflow: hidden;
   pointer-events: none; text-shadow: 2px 2px #000, 0 0 6px #000;
 }
-#battle-dialog #battle-actions, #battle-dialog #ally-select-panel {
+#battle-dialog #battle-actions, #battle-dialog #ally-select-panel, #battle-dialog #heal-target-panel {
   position: absolute; left: 12px; right: 12px; bottom: 8px; margin-top: 0;
   max-height: 112px; overflow-y: auto; pointer-events: auto;
   display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; padding: 6px;
   background: rgba(3,8,31,.92); border: 3px solid #eef8ff; border-radius: 3px; box-shadow: 0 0 0 3px #168dc0;
 }
-#battle-dialog #battle-actions button, #battle-dialog #ally-select-panel button {
+#battle-dialog #battle-actions button, #battle-dialog #ally-select-panel button, #battle-dialog #heal-target-panel button {
   padding: 4px 6px; font-size: 11px; line-height: 1.2; white-space: normal; text-align: center;
 }
+/* パーティー全員HP表示: 1人=1行、編成順のまま名前・現在HP/最大HP・HPバーを並べる */
+.battle-hud-row { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.battle-hud-row + .battle-hud-row { margin-top: 3px; }
+.battle-hud-row .hud-label { width: 56px; max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.battle-hud-row .hud-bar-bg { width: 64px; }
+.battle-hud-row .hud-num { min-width: 46px; font-size: 10px; }
+.battle-hud-row.is-ko { opacity: .5; }
+.battle-hud-row.is-ko .hud-label { text-decoration: line-through; }
 @media (max-width: 850px) {
-  #battle-dialog #battle-actions, #battle-dialog #ally-select-panel {
+  #battle-dialog #battle-actions, #battle-dialog #ally-select-panel, #battle-dialog #heal-target-panel {
     grid-template-columns: repeat(2, minmax(0,1fr)); max-height: 160px;
   }
   #battle-dialog #battle-msg { bottom: 168px; }
   /* スマホはHUDが上部2段になり縦に高くなるため、戦闘中の敵HUD・敵名・敵HPバーをその分だけ下げて重なりを防ぐ */
-  #battle-dialog #battle-hud { top: calc(env(safe-area-inset-top) + 108px); }
-  #battle-dialog #battle-monster-name { top: calc(env(safe-area-inset-top) + 138px); }
-  #battle-dialog .enemy-hp-container { top: calc(env(safe-area-inset-top) + 176px); }
+  #battle-dialog #battle-top-hud { top: calc(env(safe-area-inset-top) + 108px); }
 }
 .hidden { display: none !important; }
 
@@ -744,7 +755,7 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 
 /* ==========================================
    MYTHIC(神話継承): 服の継承クエスト(ihq-*)とは独立した専用クラスにし、
-   既存のihq-*/pf-*のスタイルには一切変更を加えない。
+   既存のihq-系・pf-系のスタイルには一切変更を加えない。
    ========================================== */
 #mythic-quest-screen {
   top: 1.5%; bottom: auto; width: 92%; height: 97%; padding: 10px 14px;
@@ -755,6 +766,15 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 }
 .mythic-quest-intro { font-size: 12px; color: #d9ccff; margin: 6px 0 10px; line-height: 1.6; flex: 0 0 auto; }
 .mythic-quest-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
+/* 閉じるボタン領域: リストのスクロールとは独立した常時表示のフッター。横幅100%のFlexboxで
+   画面下部中央に固定表示し、キャラクター一覧・文章・仮想十字キーのいずれとも重ならない。 */
+.mythic-quest-actions {
+  flex: 0 0 auto; width: 100%;
+  display: flex; justify-content: center; align-items: center;
+  margin: 8px -14px -10px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  background: #0c0620; border-top: 2px dotted rgba(224,184,255,.4);
+}
+.mythic-quest-actions .retro-btn { min-height: 44px; width: min(220px, 100%); }
 .mythic-quest-card {
   display: flex; gap: 10px; background: rgba(120,60,200,.16); border: 2px solid #a568e8; border-radius: 6px; padding: 10px;
   box-shadow: 0 0 10px rgba(180,110,255,.25);

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Z-SAGA: CHRONICLES</title>
-  <link rel="stylesheet" href="style.css?v=20260822j">
+  <link rel="stylesheet" href="style.css?v=20260822k">
   <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -108,21 +108,19 @@
 
         <!-- 本格バトルダイアログ -->
         <div id="battle-dialog" class="dialog panel-16bit hidden">
-          <!-- 戦闘HUD: 勇者のHP/MP -->
-          <div id="battle-hud">
-            <span class="hud-label">勇者</span>
-            <div class="hud-bar-bg hp"><div id="hero-hp-bar" class="hud-bar-fill"></div></div>
-            <span id="hero-hp-text" class="hud-num">100</span>
-            <div class="hud-bar-bg mp"><div id="hero-mp-bar" class="hud-bar-fill"></div></div>
-            <span id="hero-mp-text" class="hud-num">50</span>
-          </div>
+          <!-- 戦闘上部HUD: 編成順のパーティー全員のHP(勇者含む)・敵名・敵HPをまとめて上から並べる。
+               人数で高さが変わるため、個々を固定pxで配置せず、この枠のflexで自然に積む。 -->
+          <div id="battle-top-hud">
+            <!-- パーティー全員(勇者含む)の名前・HP・HPバーを編成順で表示する -->
+            <div id="battle-hud"></div>
 
-          <p id="battle-monster-name" class="monster-name">⚠️ 強欲なゴブリンが現れた！</p>
+            <p id="battle-monster-name" class="monster-name">⚠️ 強欲なゴブリンが現れた！</p>
 
-          <div class="enemy-hp-container">
-            <span>HP:</span>
-            <div class="hp-bar-bg">
-              <div id="enemy-hp-bar" class="hp-bar-fill"></div>
+            <div class="enemy-hp-container">
+              <span>HP:</span>
+              <div class="hp-bar-bg">
+                <div id="enemy-hp-bar" class="hp-bar-fill"></div>
+              </div>
             </div>
           </div>
 
@@ -138,6 +136,8 @@
 
           <!-- 戦闘中の仲間選択パネル -->
           <div id="ally-select-panel" class="battle-commands hidden"></div>
+          <!-- 回復対象の選択パネル(アイテム(回復)を押した直後、対象を選ぶまで実際の回復は発生しない) -->
+          <div id="heal-target-panel" class="battle-commands hidden"></div>
         </div>
 
         <!-- ステータス（仲間）メニュー -->
@@ -261,10 +261,12 @@
         <div id="mythic-quest-screen" class="dialog panel-16bit hidden">
           <div class="pf-header">
             <h2 class="pf-title">🌌 神話継承クエスト</h2>
-            <button id="btn-close-mythic-quest" class="retro-btn small-btn">閉じる [Esc]</button>
           </div>
           <p class="mythic-quest-intro">循環ポイントが規定値に達すると、本人がボスとして挑戦できるようになります。撃破すると本人が仲間に加わります。ポイントや挑戦権は敗北しても失いません。</p>
           <div class="mythic-quest-list" id="mythic-quest-content"></div>
+          <div class="mythic-quest-actions">
+            <button id="btn-close-mythic-quest" class="retro-btn small-btn">閉じる [Esc]</button>
+          </div>
         </div>
 
         <!-- MYTHIC撃破 → 加入演出 -->
@@ -370,11 +372,11 @@
   </div>
 
   <!-- 背景描画モジュール（差し替え予定）: drawMap(ctx, frame) を提供 -->
-  <script src="background.js?v=20260822j"></script>
+  <script src="background.js?v=20260822k"></script>
   <!-- スプライトエンジン: 外部PNGスプライトシートの読込・アニメーション制御 -->
-  <script src="sprites.js?v=20260822j"></script>
+  <script src="sprites.js?v=20260822k"></script>
   <!-- フィールド拡張: 3ステージの設定値・敵倍率・背景アニメーション・BGM切替フック(データのみ) -->
-  <script src="field-expansion.js?v=20260822j"></script>
-  <script src="main.js?v=20260822j"></script>
+  <script src="field-expansion.js?v=20260822k"></script>
+  <script src="main.js?v=20260822k"></script>
 </body>
 </html>

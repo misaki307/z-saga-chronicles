@@ -829,6 +829,10 @@ function loadPartyData() {
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return;
         GameState.party = parsed.map(p => {
+            // 個別HPを持たない古いセーブデータでも安全に動けるよう、maxHpが無ければ既存の算出式で補い、
+            // hpが無ければ満タン(maxHp)で初期化する(既存の強化値・所持データ自体は書き換えない)。
+            if (typeof p.maxHp !== 'number') p.maxHp = getAllyMaxHp(p);
+            if (typeof p.hp !== 'number') p.hp = p.maxHp;
             if (p.job === '魔物') {
                 return { ...p, sprite: new SpriteAnimator('enemy', p.enemyTypeKey || 'slime') };
             }
@@ -4387,8 +4391,6 @@ document.getElementById('btn-summon').addEventListener('click', () => {
 // BATTLE & PERFECT FIT & FASHION SHOW
 // ==========================================
 const battleDlg = document.getElementById('battle-dialog'); const bName = document.getElementById('battle-monster-name'); const bMsg = document.getElementById('battle-msg'); const bActions = document.getElementById('battle-actions'); const hpFill = document.getElementById('enemy-hp-bar');
-const heroHpFill = document.getElementById('hero-hp-bar'); const heroMpFill = document.getElementById('hero-mp-bar');
-const heroHpText = document.getElementById('hero-hp-text'); const heroMpText = document.getElementById('hero-mp-text');
 
 function updateHPUI() {
     if (!currentEnemy) return; const pct = Math.max(0, (currentEnemy.hp / currentEnemy.maxHp) * 100); hpFill.style.width = `${pct}%`; hpFill.style.background = pct > 50 ? '#00ff00' : (pct > 20 ? '#ffaa00' : '#ff0000');
@@ -4404,17 +4406,38 @@ function updateFieldLeaderHUD() {
     if (hpEl) hpEl.textContent = Math.round(typeof leader.hp === 'number' ? leader.hp : (leader.maxHp || 0));
 }
 
-// 戦闘HUD: 勇者のHP/MPバーを更新する。勇者が編成にいない間は、この専用HUD自体を隠す。
+// 戦闘HUD: 現在の編成(activePartyIds)の並び順のまま、パーティー全員(勇者含む)の
+// 名前・現在HP・最大HP・HPバーを1人1行で表示する。勇者を特別扱いして先頭に固定したり、
+// 編成にいないキャラクターを表示したりはしない。戦闘不能(HP0)の行はis-koで薄く表示する。
+function renderBattlePartyHUD() {
+    const hud = document.getElementById('battle-hud');
+    if (!hud) return;
+    const order = getActivePartyResolved();
+    hud.innerHTML = order.map(member => {
+        const isHero = member === GameState.avatar;
+        const hp = Math.max(0, Math.round(typeof member.hp === 'number' ? member.hp : (member.maxHp || 0)));
+        const maxHp = Math.max(1, Math.round(member.maxHp || hp || 1));
+        const pct = Math.max(0, Math.min(100, (hp / maxHp) * 100));
+        const isKo = hp <= 0;
+        const name = member.name || '';
+        // MPは勇者だけが持つ資源(衣装奥義のコスト)なので、勇者の行にだけ追加で表示する
+        // (パーティー全員のHP表示という仕様自体は変更しない、既存のMP可視化を維持するための追加分)。
+        const mpHtml = (isHero && typeof member.mp === 'number')
+            ? `<div class="hud-bar-bg mp"><div class="hud-bar-fill" style="width:${Math.max(0, Math.min(100, (member.mp / (member.maxMp || 1)) * 100))}%;"></div></div><span class="hud-num">${Math.round(member.mp)}/${Math.round(member.maxMp || 0)}</span>`
+            : '';
+        return `<div class="battle-hud-row${isKo ? ' is-ko' : ''}">
+            <span class="hud-label">${name}</span>
+            <div class="hud-bar-bg hp"><div class="hud-bar-fill" style="width:${pct}%;"></div></div>
+            <span class="hud-num">${hp}/${maxHp}</span>
+            ${mpHtml}
+        </div>`;
+    }).join('');
+}
+
+// 勇者のHP/MP更新に付随する既存の保存・付随表示更新(フィールドHUD・アイテムボタン)を行う。
+// パーティー全員のHUD表示自体はrenderBattlePartyHUD()が担う(呼び出し側で別途呼ぶ)。
 function updateHeroHUD() {
-    const battleHud = document.getElementById('battle-hud');
-    if (battleHud) battleHud.classList.toggle('hidden', !isHeroActive());
-    const av = GameState.avatar;
-    const hpPct = Math.max(0, Math.min(100, (av.hp / (av.maxHp || 100)) * 100));
-    const mpPct = Math.max(0, Math.min(100, (av.mp / (av.maxMp || 50)) * 100));
-    if (heroHpFill) heroHpFill.style.width = `${hpPct}%`;
-    if (heroMpFill) heroMpFill.style.width = `${mpPct}%`;
-    if (heroHpText) heroHpText.textContent = Math.round(av.hp);
-    if (heroMpText) heroMpText.textContent = Math.round(av.mp);
+    renderBattlePartyHUD();
     updateFieldLeaderHUD();
     updateItemButtonLabel();
     saveAvatar();
@@ -4435,7 +4458,8 @@ const ENEMY_SPECIAL_NAMES = { mid: '服飾呪縛', boss: '百鬼衣装絶' };
 // 勇者が現在の編成にいない場合は、勇者を抽選プールへ一切含めない(戦闘に存在しないため)。
 function pickCounterTarget() {
     const livingAllies = getActiveParty().filter(p => typeof p.hp !== 'number' || p.hp > 0);
-    const heroEntry = isHeroActive() ? [{ type: 'hero' }] : [];
+    // 勇者は編成にいて、かつ戦闘不能(HP0)でない場合だけ抽選プールへ含める
+    const heroEntry = (isHeroActive() && GameState.avatar.hp > 0) ? [{ type: 'hero' }] : [];
     const front = getFrontFighter();
     if (front && front !== GameState.avatar) {
         // 交代中(または勇者不在で仲間が前衛): 矢面に立つ仲間を抽選プールへ入れ、ベンチの勇者(いれば)は他の仲間と同列で混ぜる
@@ -4478,6 +4502,7 @@ function applyCounterDamage(target, dmg, isSpecial) {
         dmg = applyMythicBuffsToDamage(dmg);
         const before = typeof ally.hp === 'number' ? ally.hp : (ally.maxHp || getAllyMaxHp(ally));
         ally.hp = applyMythicUndying(Math.max(0, before - dmg));
+        renderBattlePartyHUD(); savePartyData(); // 受けたキャラクターだけのHPを即座に反映・保存する
         if (ally.sprite) ally.sprite.triggerHit({ hitStopFrames: isSpecial ? 10 : 5, flashFrames: isSpecial ? 24 : 12, knockbackPower: isSpecial ? 10 : 5, fromX: 1, fromY: 0, toX: 0, toY: 0.15 });
         screenShakeTimer = Math.max(screenShakeTimer, isSpecial ? 24 : 12);
         playSound(isSpecial ? 'magic' : 'hit');
@@ -4519,10 +4544,9 @@ function enemyCounterAttack(onDone) {
     const dmg = Math.max(1, Math.round(randInt(15, 30) * tierMulti * fieldAtkMult * mythicAtkMult * (isSpecial ? 1.6 : 1)));
     const target = pickCounterTarget();
 
-    // 反撃後、勇者のHPが0、または仲間が全滅していたらゲームオーバーへ切り替える(通常のonDoneは呼ばない)
-    // 勇者が編成にいない場合、勇者のHPは戦闘に無関係なので判定しない。
+    // 反撃後、編成中の全員(勇者含む)のHPが0になっていたらゲームオーバーへ切り替える(通常のonDoneは呼ばない)。
+    // 1人だけがHP0になっても戦闘は続行し、その1人は戦闘不能として攻撃・スキル・回復対象から外れるだけにする。
     const finish = () => {
-        if (isHeroActive() && GameState.avatar.hp <= 0) { triggerGameOver('hero'); return; }
         if (isPartyWiped()) { triggerGameOver('party'); return; }
         if (onDone) onDone();
     };
@@ -4545,16 +4569,17 @@ function enemyCounterAttack(onDone) {
 
 // ==========================================
 // ゲームオーバー → 回復の間
-// 発生条件: (1)勇者のHPが0になった、または (2)仲間が1人以上いる状態で全員戦闘不能になった(全滅)。
+// 発生条件: 編成中の全員(勇者含む)のHPが0になった時だけ(全滅)。
+// 1人がHP0になっただけでは戦闘不能になるだけで、戦闘もゲームオーバーも終了しない。
 // 既存の戦闘終了処理(逃げる・勝利)には触れない。
 // ==========================================
 let isGameOver = false;
 
-// 仲間が1人以上いて、かつ全員が戦闘不能(HP0)かどうか。仲間がいない場合はfalse(全滅とはみなさない)。
+// 現在の編成(勇者含む)が1人以上いて、かつ全員が戦闘不能(HP0)かどうか。
 function isPartyWiped() {
-    const trackedAllies = getActiveParty().filter(p => typeof p.hp === 'number');
-    if (trackedAllies.length === 0) return false;
-    return trackedAllies.every(p => p.hp <= 0);
+    const order = getActivePartyResolved().filter(p => typeof p.hp === 'number');
+    if (order.length === 0) return false;
+    return order.every(p => p.hp <= 0);
 }
 
 function triggerGameOver(reason) {
@@ -4563,16 +4588,13 @@ function triggerGameOver(reason) {
     ihqHandleGameOver(); // 服の継承クエスト: 配送中なら失わず「中断」にする
     isBattling = false; currentEnemy = null; battleViewState = 'idle'; activeFighter = null;
     battleDlg.classList.add('hidden');
+    allySelectPanel.classList.add('hidden'); healTargetPanel.classList.add('hidden'); bActions.classList.remove('hidden');
     stopBGM(); // 戦闘BGMを止める(重複再生防止。回復の間・復帰後の再生は別途行う)
     stopMythicStageBgm(); // MYTHICステージ専用OGGが鳴っていれば必ず止める(非MYTHIC戦では何もしない)
     playSound('hit');
     const gameoverText = document.getElementById('gameover-text');
-    if (gameoverText) {
-        // 勇者が編成にいない場合、'party'敗北時の文面にも勇者を登場させない
-        gameoverText.textContent = reason === 'party'
-            ? (isHeroActive() ? '仲間は全滅した…勇者だけが立ち尽くす…' : '仲間は全滅した…')
-            : '勇者は力尽きた…意識が遠のいていく…';
-    }
+    // 敗北は編成中の全員(勇者含む)のHPが0になった時だけなので、誰か1人が生き残っている文面にはしない
+    if (gameoverText) gameoverText.textContent = 'パーティーは全滅した…意識が遠のいていく…';
     document.getElementById('game-screen').classList.replace('active', 'hidden');
     document.getElementById('gameover-screen').classList.replace('hidden', 'active');
     setTimeout(enterRecoveryRoom, 2200);
@@ -4585,6 +4607,7 @@ function enterRecoveryRoom() {
     GameState.avatar.mp = GameState.avatar.maxMp || 50;
     GameState.party.forEach(p => { if (typeof p.hp === 'number') p.hp = p.maxHp || getAllyMaxHp(p); });
     updateHeroHUD();
+    savePartyData(); // 全回復後のHPを保存する(戦闘不能から復帰した仲間も含む)
     document.getElementById('recovery-screen').classList.replace('hidden', 'active');
 }
 
@@ -5139,7 +5162,8 @@ function openAllySelect() {
     const benchMembers = getActivePartyResolved().filter(p => p !== battleFrontForSelect);
     if (benchMembers.length === 0) { bMsg.textContent = `一緒に戦う仲間がいない…`; return; }
     // 戦闘不能(HP0)の仲間は選択できない(総追撃からも別途除外する)。勇者はHP0でも交代先として選べる。
-    const availableBench = benchMembers.filter(p => p === GameState.avatar || typeof p.hp !== 'number' || p.hp > 0);
+    // 勇者も含め、戦闘不能(HP0)のメンバーは交代・指名の対象に選べない
+    const availableBench = benchMembers.filter(p => typeof p.hp !== 'number' || p.hp > 0);
     if (availableBench.length === 0) { bMsg.textContent = `仲間は全員戦闘不能で動けない…`; return; }
     playSound('select');
     bActions.classList.add('hidden');
@@ -5362,38 +5386,76 @@ document.getElementById('btn-skill').addEventListener('click', () => {
         executeAttack(1.8, '衣装奥義・シームブレイク', true);
     }, 650);
 });
-// アイテム(回復): 所持している回復薬を実際に消費してHP・MPを回復する(攻撃はしない)
-document.getElementById('btn-item').addEventListener('click', () => {
+// アイテム(回復): 押した直後はまだ何も消費しない。「誰を回復しますか？」の対象選択を必ず挟み、
+// 対象を決定した瞬間にだけ実際にアイテムを1個消費してその1人だけを回復する。
+// 戦闘不能(HP0)のメンバーは蘇生効果を持つ技・アイテムでしか回復できないため、ここでは選べない
+// (このアイテムに蘇生効果はないため、対象一覧そのものから除外する)。
+const healTargetPanel = document.getElementById('heal-target-panel');
+
+function openHealTargetSelect() {
     if (battleViewState !== 'idle' || !currentEnemy) return;
     if (!GameState.items || (GameState.items.potion || 0) <= 0) {
         playSound('hit');
         bMsg.textContent = `回復薬を持っていない…`;
         return;
     }
+    const order = getActivePartyResolved(); // 編成順(勇者含む)、特別扱いしない
+    const alive = order.filter(p => typeof p.hp !== 'number' || p.hp > 0);
+    if (alive.length === 0) { playSound('hit'); bMsg.textContent = `回復できる仲間がいない…`; return; }
     playSound('select');
-    battleViewState = 'attacking'; bActions.classList.add('hidden');
+    bActions.classList.add('hidden');
+    healTargetPanel.innerHTML = '';
+    alive.forEach(member => {
+        const hpKnown = typeof member.hp === 'number' && typeof member.maxHp === 'number';
+        const isFull = hpKnown && member.hp >= member.maxHp;
+        const hpLabel = hpKnown ? ` HP:${Math.round(member.hp)}/${Math.round(member.maxHp)}` : '';
+        const btn = document.createElement('button');
+        btn.className = 'retro-btn cmd-btn';
+        btn.textContent = (isFull ? '💚 ' : '▶ ') + member.name + hpLabel + (isFull ? '(HP満タン)' : '');
+        btn.disabled = isFull;
+        if (!isFull) btn.addEventListener('click', () => useHealItemOn(member));
+        healTargetPanel.appendChild(btn);
+    });
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'retro-btn cmd-btn';
+    cancelBtn.textContent = '▶ キャンセル';
+    cancelBtn.addEventListener('click', closeHealTargetSelect);
+    healTargetPanel.appendChild(cancelBtn);
+    healTargetPanel.classList.remove('hidden');
+}
+
+// 対象を選ばずに戻る(何も消費しない)
+function closeHealTargetSelect() {
+    playSound('select');
+    healTargetPanel.classList.add('hidden');
+    bActions.classList.remove('hidden');
+}
+
+// 対象決定後にだけ呼ばれる: ここで初めてアイテムを消費し、選んだ1人だけのHP(勇者ならMPも)を回復する
+function useHealItemOn(target) {
+    if (battleViewState !== 'idle' || !currentEnemy) return;
+    healTargetPanel.classList.add('hidden');
+    playSound('select');
+    battleViewState = 'attacking';
     GameState.items.potion--;
+    const isHero = target === GameState.avatar;
+    const healAmount = Math.max(1, Math.round((target.maxHp || 100) * 0.5));
+    target.hp = Math.min(target.maxHp || 100, (target.hp || 0) + healAmount);
     let healMsg;
-    if (isHeroActive()) {
-        const healAmount = Math.max(1, Math.round((GameState.avatar.maxHp || 100) * 0.5));
+    if (isHero) {
         const mpHealAmount = Math.max(1, Math.round((GameState.avatar.maxMp || 50) * 0.5));
-        GameState.avatar.hp = Math.min(GameState.avatar.maxHp || 100, GameState.avatar.hp + healAmount);
         GameState.avatar.mp = Math.min(GameState.avatar.maxMp || 50, GameState.avatar.mp + mpHealAmount);
-        updateHeroHUD();
-        showHeal(200, 380, healAmount);
-        healMsg = `回復薬を使った！ HPが${healAmount}・MPが${mpHealAmount}回復した！(残り${GameState.items.potion}個)`;
+        updateHeroHUD(); // HP/MPバー再描画・アイテム数表示・保存をまとめて行う
+        healMsg = `回復薬を使った！ ${target.name}のHPが${healAmount}・MPが${mpHealAmount}回復した！(残り${GameState.items.potion}個)`;
     } else {
-        // 勇者が編成にいない場合は、現在の前衛(getFrontFighter)を回復する(勇者にはMPが無いallyオブジェクトのためHPのみ)
-        const healTarget = getFrontFighter();
-        const healAmount = Math.max(1, Math.round((healTarget.maxHp || 100) * 0.5));
-        healTarget.hp = Math.min(healTarget.maxHp || 100, (healTarget.hp || 0) + healAmount);
+        renderBattlePartyHUD();
         savePartyData();
-        updateItemButtonLabel();
-        showHeal(200, 380, healAmount);
-        healMsg = `回復薬を使った！ ${healTarget.name}のHPが${healAmount}回復した！(残り${GameState.items.potion}個)`;
+        updateItemButtonLabel(); // アイテム数表示・保存
+        healMsg = `回復薬を使った！ ${target.name}のHPが${healAmount}回復した！(残り${GameState.items.potion}個)`;
     }
     playHealFanfare();
     spawnMagicParticles(200, 400, 200, 220, '#66ffaa');
+    showHeal(200, 380, healAmount);
     bMsg.textContent = healMsg;
 
     setTimeout(() => {
@@ -5402,11 +5464,13 @@ document.getElementById('btn-item').addEventListener('click', () => {
             bActions.classList.remove('hidden');
         });
     }, 900);
-});
+}
+
+document.getElementById('btn-item').addEventListener('click', openHealTargetSelect);
 document.getElementById('btn-run').addEventListener('click', () => {
     playSound('select'); battleDlg.classList.add('hidden'); isBattling = false; currentEnemy = null; activeFighter = null; endBattleBGM();
     attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0;
-    allySelectPanel.classList.add('hidden'); bActions.classList.remove('hidden');
+    allySelectPanel.classList.add('hidden'); healTargetPanel.classList.add('hidden'); bActions.classList.remove('hidden');
 });
 
 let fsCanvas, fsCtx, fsTime = 0, fsBoss = null;
