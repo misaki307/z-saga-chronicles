@@ -3006,6 +3006,7 @@ function changeField(nextFieldId) {
     const unlocked = !field.unlockAfter || GameState.worldProgress.defeatedBosses[field.unlockAfter];
     if (!unlocked) return;
 
+    isInLaundryPlaza = false; // 広場内から移動メニューで別フィールドを選んだ場合、広場滞在状態を解除する
     GameState.currentFieldId = nextFieldId; // 背景はdrawGame()がcurrentFieldIdを見て次フレームから自動的に切り替わる
     player.x = 400; player.y = 500; historyLog.length = 0;
     updateFieldDialogText();
@@ -3014,7 +3015,8 @@ function changeField(nextFieldId) {
 }
 
 function openFieldTravel() {
-    if (isBattling || isMenuOpen || isShopOpen || isFashionShow || isInLaundryPlaza) return;
+    // 広場滞在中も移動メニューを開けるようにする(移動ボタンが無反応になり、他フィールドへ行けなくなる不具合の修正)
+    if (isBattling || isMenuOpen || isShopOpen || isFashionShow) return;
     playSound('select');
     const fx = window.ZSAGA_FIELD_EXPANSION;
     const list = document.getElementById('field-travel-list');
