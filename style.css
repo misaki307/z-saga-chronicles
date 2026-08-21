@@ -16,12 +16,15 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 
 @media (max-width: 850px) {
   body { padding: 0; }
-  /* スマホは画面全体(100dvw/100dvh)を優先して大きく表示する。縦長端末では縦横比が4:3から外れるため
-     キャラクター等が多少引き伸ばされる場合があるが、狭い画面での視認性を優先する。 */
+  /* スマホは画面全体(100dvw/100dvh)を優先して大きく表示する。内部解像度(800x600・4:3)の縦横比は
+     常に保ったまま、縦長ビューポートに収まらない横方向だけをmain.jsのupdateMobileCameraFit()が
+     毎フレーム、プレイヤー中心にパンして見せる(戦闘中は全体が見えるよう横幅基準で収める)。
+     縦横比を保つため、canvasのwidth/height/位置はJSがpxで直接指定する(CSSのtransform:scaleは使わない)。 */
   #game-container {
     width: 100dvw; height: 100dvh; max-width: none; aspect-ratio: auto; border: none; box-shadow: none;
+    overflow: hidden;
   }
-  #game-canvas { object-fit: fill; }
+  #game-canvas { position: absolute; top: 0; left: 0; height: 100%; width: auto; object-fit: contain; }
 }
 
 .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; flex-direction: column; justify-content: center; align-items: center; }
@@ -92,8 +95,6 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .party-member-row small { display:block; font-size:12px; opacity:.86; }
 .party-member-row.is-knocked-out { opacity:.45; filter:grayscale(70%); }
 .party-sprite { display:inline-block; width:48px; height:48px; flex:0 0 48px; background-image:var(--ally-sprite); background-size:1200% 400%; background-position:0 0; background-repeat:no-repeat; image-rendering:pixelated; }
-/* アステア専用ポートレート(party_special_actions.png 1536x1024, 6列×3行)の先頭コマだけを表示する */
-.is-asteria-portrait { background-size:600% 300% !important; background-position:0 0 !important; }
 .role-mage { color:#ff65d5; } .role-archer { color:#e9e33d; } .role-warrior { color:#ff7143; }
 /* 承認済み23人の本人portrait(256x256透過PNG)。歩行スプライトシートとは別の実画像として表示する。 */
 .character-portrait { display:inline-block; width:48px; height:48px; flex:0 0 48px; object-fit:contain; image-rendering:pixelated; background:transparent; }

@@ -1996,6 +1996,50 @@ function applyDamageToEnemy(enemy, rawDmg, isPiercing) {
 const canvas = document.getElementById('game-canvas'); const ctx = canvas.getContext('2d');
 canvas.width = 800; canvas.height = 600;
 ctx.imageSmoothingEnabled = false; // ドットをぼかさない
+
+// ==========================================
+// スマホ縦長ビューポート: canvasの内部解像度(800x600・4:3)は変えず、CSSで表示位置/サイズだけを
+// 毎フレーム調整する。X/Yを別倍率でscaleすると絵が潰れるため、常に一つの倍率(縦基準)で揃える。
+// フィールド中は横だけプレイヤー中心にパン(縦は画面いっぱいで見切れない)、戦闘中は全体が
+// 見切れないよう横幅基準で収め、上下を黒帯にする。
+// ==========================================
+const gameContainerEl = document.getElementById('game-container');
+const mobileViewportMQ = window.matchMedia('(max-width: 850px)');
+function updateMobileCameraFit() {
+    if (!mobileViewportMQ.matches) {
+        if (canvas.style.position) canvas.style.cssText = ''; // PC用CSS(width:100%/height:100%/object-fit:contain)に戻す
+        return;
+    }
+    const cw = gameContainerEl.clientWidth, ch = gameContainerEl.clientHeight;
+    if (!cw || !ch) return;
+    canvas.style.position = 'absolute';
+    if (isBattling) {
+        // 戦闘は横幅基準で全体(前衛・敵とも)を収め、上下中央寄せにする
+        const dispW = cw, dispH = cw * (600 / 800);
+        canvas.style.width = `${dispW}px`;
+        canvas.style.height = `${dispH}px`;
+        canvas.style.left = '0px';
+        canvas.style.top = `${(ch - dispH) / 2}px`;
+        canvas.style.transform = 'none';
+    } else {
+        // フィールドは縦いっぱいに使い、横だけプレイヤーを中心に追従してパンする
+        const s = ch / 600;
+        const dispW = 800 * s;
+        canvas.style.width = `${dispW}px`;
+        canvas.style.height = `${ch}px`;
+        canvas.style.left = '0px';
+        canvas.style.top = '0px';
+        let offsetXpx = 0;
+        if (dispW > cw) {
+            const worldVisibleW = cw / s;
+            const desiredLeft = player.x - worldVisibleW / 2;
+            const clampedLeft = Math.max(0, Math.min(800 - worldVisibleW, desiredLeft));
+            offsetXpx = -clampedLeft * s;
+        }
+        canvas.style.transform = `translateX(${offsetXpx}px)`;
+    }
+}
+window.addEventListener('resize', updateMobileCameraFit);
 const player = { x: 400, y: 300, vx: 0, vy: 0, speed: 5 }; const keys = {}; const historyLog = [];
 let footstepTimer = 0; let footstepToggle = false; // 移動中の足音(交互に鳴らして左右の足を表現)
 const GRASS_ZONES = [{ x: 220, y: 170, w: 100, h: 60 }, { x: 500, y: 200, w: 80, h: 100 }, { x: 350, y: 300, w: 80, h: 120 }, { x: 450, y: 470, w: 120, h: 50 }];
@@ -2077,19 +2121,18 @@ function drawFollowerSprite(follower, x, y, scale, isBattleContext) {
     ctx.save();
     if (isKnockedOut) ctx.globalAlpha = 0.35;
     try {
-    // アステアだけ専用ポートレート(先頭コマ)を使う。フィールド追従・戦闘画面の両方がここを通る。
-    if (follower.name === ASTERIA_NAME && asteriaPortraitImg.complete && asteriaPortraitImg.naturalWidth > 0) {
+    // アステアはスキル演出中(該当コマ・浮遊・発光)だけ専用アトラスを使う。
+    // 通常時は他の承認済みキャラと同じ経路(戦闘画面はportraitPath、フィールドは本人の歩行スプライト)を使う。
+    if (follower.name === ASTERIA_NAME && asteriaSkillActive && asteriaSkillFrameIndex >= 0 && asteriaPortraitImg.complete && asteriaPortraitImg.naturalWidth > 0) {
         const cellW = asteriaPortraitImg.naturalWidth / ASTERIA_ATLAS_COLS;
         const cellH = asteriaPortraitImg.naturalHeight / ASTERIA_ATLAS_ROWS;
         const baseCell = follower.sprite ? follower.sprite.cell : 48;
         const dh = baseCell * scale; // 他の仲間と高さを揃え、アスペクト比は保って歪ませない
         const dw = dh * (cellW / cellH);
-        // スキル演出中(asteriaSkillActive)だけ該当コマ・浮遊・発光を適用する。通常時は先頭コマ・元位置のまま。
-        const isSkilling = asteriaSkillActive && asteriaSkillFrameIndex >= 0;
-        const srcCol = isSkilling ? asteriaSkillFrameIndex : 0;
-        const drawY = y - (isSkilling ? asteriaSkillFloatY : 0);
+        const srcCol = asteriaSkillFrameIndex;
+        const drawY = y - asteriaSkillFloatY;
         ctx.save();
-        if (isSkilling && asteriaSkillGlowColor) {
+        if (asteriaSkillGlowColor) {
             const glowR = dw * 0.85;
             const grad = ctx.createRadialGradient(x, drawY - dh / 2, 4, x, drawY - dh / 2, glowR);
             grad.addColorStop(0, asteriaSkillGlowColor);
@@ -2849,6 +2892,7 @@ function loop() {
     if (!isBattling) updateGame();
     if (isBattling || particles.length > 0 || dmgTexts.length > 0) updateBattleEffects();
     updateAllSprites();
+    updateMobileCameraFit();
     drawGame();
     if (isFashionShow) drawFashionShow(); // Draw separate layer if active
     gameLoopId = requestAnimationFrame(loop);
@@ -2878,15 +2922,13 @@ function toggleMenu() {
                 li.textContent = `${p.name} (元・${p.originItem}の主) ${growthLabel}${hpLabel}`;
             } else {
                 const visual = ALLY_VISUALS[p.job] || ALLY_VISUALS['裁断戦士'];
-                const isAsteria = p.name === ASTERIA_NAME;
                 const styleColor = STYLE_COLORS[p.style] || '#fff';
                 const styleLabel = p.style ? `<span style="color:${styleColor};">${p.style}</span> / ` : '';
-                // 承認済みキャラは本人portraitPathを表示する。アステアは専用ポートレート、それ以外は歩行スプライトの先頭コマ。
-                const imgTag = isAsteria
-                    ? `<span class="party-sprite is-asteria-portrait" style="--ally-sprite:url('${ASTERIA_PORTRAIT_PATH}')"></span>`
-                    : (p.portraitPath
-                        ? `<img class="character-portrait" src="${p.portraitPath}" alt="${p.name}">`
-                        : `<span class="party-sprite" style="--ally-sprite:url('${visual.path}')"></span>`);
+                // 承認済みキャラは本人portraitPathを表示する。それ以外は歩行スプライトの先頭コマ。
+                const portraitPos = p.name === ASTERIA_NAME ? ' style="object-position:center bottom;"' : '';
+                const imgTag = p.portraitPath
+                    ? `<img class="character-portrait" src="${p.portraitPath}" alt="${p.name}"${portraitPos}>`
+                    : `<span class="party-sprite" style="--ally-sprite:url('${visual.path}')"></span>`;
                 li.className = `party-member-row ${visual.roleClass}${isKO ? ' is-knocked-out' : ''}`;
                 li.innerHTML = `${imgTag}<span>✨${p.name}<small>${p.job || visual.label} / ${styleLabel}${p.rarity} / ${growthLabel}${hpLabel}</small></span>`;
             }
@@ -3175,11 +3217,9 @@ document.getElementById('btn-summon').addEventListener('click', () => {
         // 召喚された仲間のスプライトを画面中央へ大きく表示するマークアップを組み立てる。
         // S以上は最初シルエット(黒塗り)で登場させ、カットインの後に本カラーへ切り替える。
         const buildResultMarkup = (silhouette) => {
-            // アステアだけ専用ポートレートを使う(名前一致時のみ。他キャラの表示は変更しない)
-            const isAsteria = picked.name === ASTERIA_NAME;
             // 承認済み23人は本人のportraitPathを大きく表示する(役職共通画像には置き換えない)
-            const spritePath = isAsteria ? ASTERIA_PORTRAIT_PATH : (picked.portrait || allyVisual.path);
-            const spriteClass = isAsteria ? ' is-asteria-portrait' : (picked.portrait ? ' is-portrait-image' : '');
+            const spritePath = picked.portrait || allyVisual.path;
+            const spriteClass = picked.portrait ? ' is-portrait-image' : '';
             const styleColor = STYLE_COLORS[itemStyle] || '#fff';
             document.getElementById('summon-result').innerHTML = `
               <div class="gacha-reveal rank-${rankData.key.toLowerCase()} ${allyVisual.roleClass}">
@@ -3234,7 +3274,7 @@ document.getElementById('btn-summon').addEventListener('click', () => {
             // finishReveal()がshopMsgを最終文言へ書き換えると.summon-areaの実高さが変わることがあるため、
             // 確定後の高さで召喚結果ポートレートのサイズを再計算し、全身が枠外へはみ出さないようにする。
             const finalAlly = document.querySelector('.summoned-ally.big.is-portrait-image');
-            if (finalAlly && picked.portrait && picked.name !== ASTERIA_NAME) applyPortraitCrop(finalAlly, picked.id);
+            if (finalAlly && picked.portrait) applyPortraitCrop(finalAlly, picked.id);
         };
 
         // 時環の種子が展開する瞬間を見せてから、レアリティと仲間を表示する
@@ -4165,9 +4205,9 @@ function pfPortraitBg(p) {
         const path = files ? (files[p.job] || files['勇者']) : '';
         return path ? `background-image:url('${path}');` : '';
     }
-    if (p.name === ASTERIA_NAME) return `background-image:url('${ASTERIA_PORTRAIT_PATH}'); background-size:600% 300%; background-position:0 0;`;
     if (!p.portraitPath) return '';
-    return `background-image:url('${p.portraitPath}'); background-size:contain; background-position:center;`;
+    const pos = p.name === ASTERIA_NAME ? 'center bottom' : 'center';
+    return `background-image:url('${p.portraitPath}'); background-size:contain; background-position:${pos};`;
 }
 
 // 勇者の歩行スプライト(cell:48の正方形1コマ目=下向きidle)を、箱の実際の高さに合わせて
