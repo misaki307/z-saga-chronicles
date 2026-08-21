@@ -1276,18 +1276,20 @@ function applyPortraitCrop(el, characterId) {
     if (!el || !bbox) return;
     const stage = el.closest('.summon-portrait-stage');
     const cssTargetH = parseFloat(getComputedStyle(stage || document.documentElement).getPropertyValue('--portrait-target-h')) || 240;
-    // stage自身のoffsetHeightは、この時点でまだally本体のサイズが未確定のため信用できない
-    // (flex:1がally挿入前の空の状態を基準に伸びてしまい、確定後のカード高さとズレて全身が
-    // 枠外にはみ出すことがあった)。代わりに.summon-area(外側のflex列で高さが確定済み)から
-    // 実際のカード高さとgapを差し引いた「安全な残り高さ」を直接計算し、それを上限にする。
+    // キャラは.summon-area内でtop:46%固定・中心配置(CSS側のtransform:translate(-50%,-50%)と対応)。
+    // .gacha-cardは独立した絶対配置(エリア下端固定)でキャラの位置には影響しないが、
+    // 大きすぎるとカードと重なる恐れがあるため、実測した高さから重ならない上限だけを計算する。
     const area = el.closest('.summon-area');
     const card = area ? area.querySelector('.gacha-card') : null;
-    let safeH = cssTargetH;
-    if (area && card && stage) {
-        const gapPx = parseFloat(getComputedStyle(stage.parentElement).gap) || 0;
-        safeH = area.offsetHeight - card.offsetHeight - gapPx - 18; // 18pxは丸め誤差・枠線・再計算タイミング差の安全バッファ
+    let targetH = cssTargetH;
+    if (area) {
+        const areaH = area.offsetHeight;
+        const centerY = areaH * 0.46;
+        const topMargin = 8;
+        const cardClearance = card ? (card.offsetHeight + 14) : 8; // カード上端 + 余白
+        const halfAvail = Math.min(centerY - topMargin, areaH - cardClearance - centerY);
+        if (halfAvail > 10) targetH = Math.min(cssTargetH, halfAvail * 2);
     }
-    const targetH = safeH > 20 ? Math.min(safeH, cssTargetH) : cssTargetH;
     const bboxH = bbox.y1 - bbox.y0;
     const bboxW = bbox.x1 - bbox.x0;
     const scale = targetH / bboxH;
@@ -1295,7 +1297,6 @@ function applyPortraitCrop(el, characterId) {
     const bgSize = PORTRAIT_CANVAS_SIZE * scale;
     el.style.width = `${elW}px`;
     el.style.height = `${targetH}px`;
-    el.style.flex = `0 0 ${elW}px`;
     el.style.setProperty('--bg-w', `${bgSize}px`);
     el.style.setProperty('--bg-h', `${bgSize}px`);
     el.style.setProperty('--bg-x', `${-bbox.x0 * scale}px`);

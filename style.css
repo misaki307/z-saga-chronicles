@@ -233,11 +233,16 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 @keyframes shard-float { to{margin-top:-20px;filter:drop-shadow(0 0 14px #b26cff) brightness(1.4)} }
 @keyframes shard-pulse { to{filter:brightness(1.6)} }
 #summon-result { position:absolute; z-index:8; left:50%; top:0; bottom:4px; transform:translateX(-50%); width:94%; pointer-events:none; }
-.gacha-reveal { height:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:2px; animation:ally-reveal .55s cubic-bezier(.16,.88,.25,1.3); }
-/* ポートレートの表示枠。ランクに関わらず高さを固定し、下端(足元)をここへ揃える(魔法陣の位置と合わせた基準線)。
-   これにより大きさがランクごとに違っても、キャラクターの立ち位置が上下にずれて見えることがなくなる。
-   高さは --portrait-target-h (画面幅に応じて自動調整) に統一する。 */
-.summon-portrait-stage { position:relative; width:100%; flex:1 1 auto; min-height:0; max-height:var(--portrait-target-h,196px); display:flex; align-items:flex-end; justify-content:center; }
+.gacha-reveal { position:relative; height:100%; width:100%; animation:ally-reveal .55s cubic-bezier(.16,.88,.25,1.3); }
+/* ポートレートの表示枠。キャラの中心を演出エリアの上寄り中央(top:46%)に固定し、下のgacha-card
+   (絶対配置・独立)がどれだけ高さを取ってもキャラの位置がずれたり押し下げられたりしないようにする。
+   これにより大きさがランクごとに違っても、キャラクターの中心位置が常に揃う。
+   高さは --portrait-target-h (画面幅に応じて自動調整) を上限にする。 */
+.summon-portrait-stage {
+  position:absolute; left:50%; top:46%; transform:translate(-50%,-50%);
+  max-height:var(--portrait-target-h,196px);
+  display:flex; align-items:center; justify-content:center;
+}
 /* 召喚結果ポートレート専用: 画像は加工せず、キャラごとの実絵柄範囲(bbox)に合わせて
    background-size/positionをJSで計算し、透明余白を吸収して見た目の背丈を揃える。 */
 .summon-portrait-stage .summoned-ally.is-portrait-image {
@@ -296,8 +301,9 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 }
 @keyframes pulse-charge { 0% { transform: scale(1); } 100% { transform: scale(1.15); } }
 
-/* 召喚結果カード: ランク(B/A/S/SS/SSS)に応じた登場演出 */
-.gacha-card { position:relative; padding: 4px 14px; border-radius: 4px; display: inline-block; min-width:280px; background:rgba(2,5,22,.92); animation: card-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+/* 召喚結果カード: ランク(B/A/S/SS/SSS)に応じた登場演出。
+   キャラ(.summon-portrait-stage)とは独立してエリア下端に絶対配置し、カードの高さがキャラの位置に影響しないようにする。 */
+.gacha-card { position:absolute; left:50%; bottom:6px; transform:translateX(-50%); padding: 4px 14px; border-radius: 4px; display: inline-block; min-width:280px; max-width:92%; background:rgba(2,5,22,.92); animation: card-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
 @keyframes card-pop { 0% { transform: scale(0.3) rotate(-8deg); opacity: 0; } 60% { transform: scale(1.15) rotate(3deg); opacity: 1; } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
 .gacha-rank { font-size: 26px; font-weight: bold; color: #f1c40f; text-shadow: 2px 2px #000; letter-spacing: 2px; line-height:1.05; margin-bottom:1px; }
 .gacha-card h3 { line-height:1.05; margin-top:2px !important; }
