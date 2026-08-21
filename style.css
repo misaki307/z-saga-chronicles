@@ -410,7 +410,8 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 #ui-overlay:has(#party-formation-screen:not(.hidden)) #virtual-dpad,
 #ui-overlay:has(#shop-screen:not(.hidden)) #virtual-dpad,
 #ui-overlay:has(#mythic-quest-screen:not(.hidden)) #virtual-dpad,
-#ui-overlay:has(#mythic-join-screen:not(.hidden)) #virtual-dpad {
+#ui-overlay:has(#mythic-join-screen:not(.hidden)) #virtual-dpad,
+#ui-overlay:has(#mythic-appear-screen:not(.hidden)) #virtual-dpad {
   display: none !important;
 }
 
@@ -777,6 +778,23 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 
 .pf-roster-card.pf-rarity-mythic { border-color: #ff8fd6; box-shadow: 0 0 10px rgba(255,143,214,.7), 0 0 18px rgba(120,90,255,.5); }
 
+/* MYTHICボス登場演出(確定・ガチャ風カットイン)。#flash-effect/.reveal-spark/.reveal-ringは既存のガチャ演出を再利用する */
+#mythic-appear-screen {
+  display: flex; align-items: center; justify-content: center; background: rgba(2,1,8,.82);
+  z-index: 96; width: 100%; height: 100%; top: 0; bottom: 0; left: 0; transform: none; border: none; box-shadow: none;
+}
+.mythic-appear-box { position: relative; width: 88%; max-width: 380px; text-align: center; }
+.mythic-appear-stage { position: relative; width: 100%; max-width: 260px; height: 260px; margin: 0 auto; display: flex; align-items: center; justify-content: center; }
+.mythic-appear-stage img {
+  max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: pixelated;
+  filter: brightness(0); opacity: .92; transition: filter .5s ease;
+}
+.mythic-appear-stage.is-revealed img { filter: brightness(1); }
+.mythic-appear-title, .mythic-appear-name { opacity: 0; transition: opacity .6s ease; }
+.mythic-appear-title.is-shown, .mythic-appear-name.is-shown { opacity: 1; }
+.mythic-appear-title { font-size: 14px; color: #ffe0f6; letter-spacing: 2px; margin-top: 16px; text-shadow: 1px 1px #07101e; }
+.mythic-appear-name { font-size: 24px; font-weight: bold; color: #fff; margin-top: 6px; text-shadow: 2px 2px #07101e, 0 0 16px rgba(255,255,255,.6); }
+
 @media (max-width: 850px) {
   #mythic-quest-screen { padding: 8px 10px; font-size: 13px; }
   #mythic-quest-screen .pf-header { flex-wrap: wrap; gap: 6px; }
@@ -784,4 +802,6 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
   .mythic-quest-card { flex-direction: column; align-items: center; text-align: center; }
   .mythic-quest-portrait { width: 100px; height: 100px; }
   .mythic-join-portrait-frame { height: 170px; }
+  .mythic-appear-stage { max-width: 200px; height: 200px; }
+  .mythic-appear-name { font-size: 19px; }
 }

@@ -1732,9 +1732,9 @@ const REVEAL_EFFECT_BY_RANK = {
     SSS: { sparkCount: 24, sparkColor: '#ffe98a', sparkSize: 9, ringColor: '#f1c40f', ringScale: 22, rings: 3 }
 };
 // 公開の瞬間に、ランクに応じた数・色の光の粒とリングを一瞬だけ表示する(既存の画面フラッシュ・シェイクとは別の演出)
-function spawnRevealEffects(rankKey) {
+function spawnRevealEffects(rankKey, targetEl) {
     const cfg = REVEAL_EFFECT_BY_RANK[rankKey] || REVEAL_EFFECT_BY_RANK.C;
-    const stage = document.querySelector('.summon-portrait-stage');
+    const stage = targetEl || document.querySelector('.summon-portrait-stage');
     if (!stage) return;
     for (let i = 0; i < cfg.sparkCount; i++) {
         const spark = document.createElement('span');
@@ -4563,14 +4563,61 @@ function startMythicBossEncounter(mythicId) {
     attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0; resetAllyUltimateGauges();
     setTimeout(() => {
         document.getElementById('game-screen').classList.remove('screen-shake'); document.getElementById('encounter-effect').classList.add('hidden');
-        currentEnemy = buildMythicBossEnemy(mythicId); battleViewState = 'idle'; updateHPUI(); updateHeroHUD();
+        currentEnemy = buildMythicBossEnemy(mythicId); battleViewState = 'attacking'; updateHPUI(); updateHeroHUD();
+        // 確定演出が終わるまでコマンドは操作不可(battleViewStateを'attacking'のままにし、bActionsも隠しておく)
         if (GameState.avatar.sprite) { GameState.avatar.sprite.dir = DIR.RIGHT; GameState.avatar.sprite.setAction('idle'); }
         GameState.party.forEach(p => { if (p.sprite) { p.sprite.dir = DIR.RIGHT; p.sprite.setAction('idle'); } });
         bName.textContent = `⚠️【神話継承クエスト】${def.questTitle}`;
         bMsg.textContent = `${def.name}が立ちはだかる…！ ${def.boss.mechanicText}`;
-        bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden');
+        bActions.classList.add('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden');
         playMythicStageBgm(def.stageBgm); // 専用ステージへ入った瞬間、既存フィールド/戦闘BGMを止めて専用OGGを1曲だけループ再生する
+        playMythicAppearSequence(def, () => {
+            battleViewState = 'idle';
+            bActions.classList.remove('hidden');
+        });
     }, 1200);
+}
+
+// MYTHICボス登場の確定演出(ガチャ風カットイン): シルエット表示→画面フラッシュ(SSS演出を流用)→
+// 本人カラーで全身絵が浮かび上がる→タイトル/名前を表示→終了後にonCompleteで戦闘コマンドを解放する。
+// 敗北して再挑戦した時も、循環ポイント到達の判定と同じく毎回必ず流れる(ランダム性は無い)。
+function playMythicAppearSequence(def, onComplete) {
+    const screen = document.getElementById('mythic-appear-screen');
+    const stage = document.getElementById('mythic-appear-stage');
+    const img = document.getElementById('mythic-appear-portrait');
+    const titleEl = document.getElementById('mythic-appear-title');
+    const nameEl = document.getElementById('mythic-appear-name');
+    if (!screen || !stage || !img || !titleEl || !nameEl) { if (onComplete) onComplete(); return; }
+
+    img.src = def.image;
+    stage.classList.remove('is-revealed');
+    titleEl.classList.remove('is-shown'); titleEl.textContent = def.questTitle;
+    nameEl.classList.remove('is-shown'); nameEl.textContent = def.name;
+    screen.classList.remove('hidden');
+    screenShakeTimer = Math.max(screenShakeTimer, 30);
+    playSound('noise');
+
+    setTimeout(() => {
+        const flash = document.getElementById('flash-effect');
+        flash.className = 'flash-sss'; flash.classList.remove('hidden');
+        playSound('gachasss');
+        screenShakeTimer = Math.max(screenShakeTimer, 40);
+        setTimeout(() => flash.classList.add('hidden'), 2500);
+    }, 900);
+
+    setTimeout(() => {
+        stage.classList.add('is-revealed'); // シルエット→本人カラーへ
+        spawnRevealEffects('SSS', stage);
+        playSound('fanfareEpic');
+    }, 1000);
+
+    setTimeout(() => { titleEl.classList.add('is-shown'); }, 1500);
+    setTimeout(() => { nameEl.classList.add('is-shown'); }, 1900);
+
+    setTimeout(() => {
+        screen.classList.add('hidden');
+        if (onComplete) onComplete();
+    }, 2900);
 }
 
 // 攻撃直前に呼ぶ: 通常はisPiercingをそのまま返す。セレスティアだけ、現在必要な属性と一致する
