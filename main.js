@@ -2301,14 +2301,13 @@ function getActiveParty() {
 function isHeroActive() {
     return GameState.activePartyIds.includes(HERO_KEY);
 }
-// 戦闘の前衛(現在「たたかう」を行う本人)を返す。activeFighter(仲間と交代中)が優先され、
-// 未交代なら勇者(編成にいる場合)、勇者が編成にいなければ現在の編成の先頭(生存者優先)を返す。
-// これにより、勇者を編成から外した状態では戦闘に一切現れなくなる。
+// 戦闘の前衛(現在「たたかう」を行う本人)を返す。activeFighter(手動で交代中)が優先され、
+// 未交代なら編成順(activePartyIds、getActivePartyResolvedの並びそのまま)の先頭(生存者優先)を返す。
+// 勇者を特別扱いして先頭へ持ち上げることはしない(勇者も編成上の位置どおりに扱う)。
 function getFrontFighter() {
     if (activeFighter) return activeFighter;
-    if (isHeroActive()) return GameState.avatar;
-    const party = getActiveParty();
-    return party.find(p => typeof p.hp !== 'number' || p.hp > 0) || party[0] || null;
+    const order = getActivePartyResolved();
+    return order.find(p => typeof p.hp !== 'number' || p.hp > 0) || order[0] || null;
 }
 // フィールドで先頭に立ち、プレイヤーが操作するキャラ(勇者 or 仲間の誰か)を返す
 function getFieldLeader() {
@@ -3280,13 +3279,10 @@ function drawGame() {
         });
         drawBossGateIndicator(ctx);
     } else if (isBattling && currentEnemy) {
-        // 前衛(getFrontFighterが返す本人)を後衛グリッドから外す。勇者が編成にいて前衛でない場合だけ、
-        // ベンチの勇者をそこに並べる(勇者が編成にいなければ一切表示しない)。
-        const activeParty = getActiveParty();
+        // 前衛(getFrontFighterが返す本人)を編成順の並びから外した残りをそのままベンチに並べる。
+        // 勇者だけを特別扱いして先頭や別枠へ動かすことはしない(編成順=activePartyIdsの並びを維持する)。
         const battleFront = getFrontFighter();
-        const benchList = (isHeroActive() && battleFront !== GameState.avatar)
-            ? [GameState.avatar, ...activeParty.filter(p => p !== battleFront)]
-            : activeParty.filter(p => p !== battleFront);
+        const benchList = getActivePartyResolved().filter(p => p !== battleFront);
         benchList.forEach((follower, i) => {
             let px = 100 - (Math.floor(i / 3) * 30), py = 300 + ((i % 3) * 60);
             drawFollowerSprite(follower, px, py, 0.9, true);
@@ -5124,26 +5120,29 @@ const allySelectPanel = document.getElementById('ally-select-panel');
 
 function openAllySelect() {
     if (battleViewState !== 'idle' || !currentEnemy) return;
-    const activePartyForSelect = getActiveParty();
-    if (activePartyForSelect.length === 0 && !activeFighter) { bMsg.textContent = `一緒に戦う仲間がいない…`; return; }
-    // 戦闘不能(HP0)の仲間は選択できない(総追撃からも別途除外する)
-    const availableAllies = activePartyForSelect.filter(a => typeof a.hp !== 'number' || a.hp > 0);
-    if (availableAllies.length === 0 && !activeFighter) { bMsg.textContent = `仲間は全員戦闘不能で動けない…`; return; }
+    // 編成順(activePartyIds)のまま、前衛を除いた残りを並べる。勇者もこの並びの中の1人として扱い、
+    // 特別に先頭やリスト最上段へ持ち上げることはしない。
+    const battleFrontForSelect = getFrontFighter();
+    const benchMembers = getActivePartyResolved().filter(p => p !== battleFrontForSelect);
+    if (benchMembers.length === 0) { bMsg.textContent = `一緒に戦う仲間がいない…`; return; }
+    // 戦闘不能(HP0)の仲間は選択できない(総追撃からも別途除外する)。勇者はHP0でも交代先として選べる。
+    const availableBench = benchMembers.filter(p => p === GameState.avatar || typeof p.hp !== 'number' || p.hp > 0);
+    if (availableBench.length === 0) { bMsg.textContent = `仲間は全員戦闘不能で動けない…`; return; }
     playSound('select');
     bActions.classList.add('hidden');
     allySelectPanel.innerHTML = '';
 
-    // 交代中は、勇者と完全に交代して戻すボタンを一番上に出す(勇者が編成にいる場合だけ)
-    const battleFrontForSelect = getFrontFighter();
-    if (isHeroActive() && battleFrontForSelect !== GameState.avatar) {
-        const heroBtn = document.createElement('button');
-        heroBtn.className = 'retro-btn cmd-btn';
-        heroBtn.textContent = `🔄 ${GameState.avatar.name}(勇者)と交代する`;
-        heroBtn.addEventListener('click', () => swapActiveFighter('hero'));
-        allySelectPanel.appendChild(heroBtn);
-    }
-
-    availableAllies.forEach(ally => {
+    availableBench.forEach(member => {
+        if (member === GameState.avatar) {
+            // 勇者は交代ボタンのみ(攻撃・衣装奥義は既存の戦闘コマンド側で行うため、ここでは追加しない)
+            const heroBtn = document.createElement('button');
+            heroBtn.className = 'retro-btn cmd-btn';
+            heroBtn.textContent = `🔄 ${GameState.avatar.name}(勇者)と交代する`;
+            heroBtn.addEventListener('click', () => swapActiveFighter('hero'));
+            allySelectPanel.appendChild(heroBtn);
+            return;
+        }
+        const ally = member;
         const hpLabel = typeof ally.hp === 'number' ? ` HP:${ally.hp}/${ally.maxHp}` : '';
         const btn = document.createElement('button');
         btn.className = 'retro-btn cmd-btn';
@@ -5198,13 +5197,11 @@ function openAllySelect() {
             allySelectPanel.appendChild(mythicBtn);
         }
 
-        if (ally !== battleFrontForSelect) {
-            const swapBtn = document.createElement('button');
-            swapBtn.className = 'retro-btn cmd-btn';
-            swapBtn.textContent = `🔄 ${ally.name}と交代する`;
-            swapBtn.addEventListener('click', () => swapActiveFighter(ally));
-            allySelectPanel.appendChild(swapBtn);
-        }
+        const swapBtn = document.createElement('button');
+        swapBtn.className = 'retro-btn cmd-btn';
+        swapBtn.textContent = `🔄 ${ally.name}と交代する`;
+        swapBtn.addEventListener('click', () => swapActiveFighter(ally));
+        allySelectPanel.appendChild(swapBtn);
     });
     const backBtn = document.createElement('button');
     backBtn.className = 'retro-btn cmd-btn';
@@ -5218,13 +5215,15 @@ function openAllySelect() {
 // もう一度開いて勇者(または他の仲間)を選べば交代し直せる。交代自体も1ターン使う(敵の反撃を受けうる)。
 function swapActiveFighter(target) {
     if (battleViewState !== 'idle' || !currentEnemy) return;
-    const nextFighter = (target === 'hero') ? null : target;
+    // 'hero'は勇者本人を指す特殊文字列。activeFighterには常に実際の対象(勇者または仲間)を入れる
+    // (nullは「手動交代なし=編成順の自然な前衛」を表す専用の意味を持つため、勇者をnullで表さない)。
+    const nextFighter = (target === 'hero') ? GameState.avatar : target;
     if (nextFighter === activeFighter) { allySelectPanel.classList.add('hidden'); bActions.classList.remove('hidden'); return; }
     allySelectPanel.classList.add('hidden');
     battleViewState = 'attacking';
     playSound('select');
     activeFighter = nextFighter;
-    const activeName = activeFighter ? activeFighter.name : GameState.avatar.name;
+    const activeName = activeFighter.name;
     if (GameState.avatar.sprite) { GameState.avatar.sprite.dir = DIR.RIGHT; GameState.avatar.sprite.setAction('idle'); }
     GameState.party.forEach(p => { if (p.sprite) { p.sprite.dir = DIR.RIGHT; p.sprite.setAction('idle'); } });
     bMsg.textContent = `🔄 ${activeName}と交代した！`;
@@ -5336,7 +5335,7 @@ document.getElementById('btn-ally').addEventListener('click', openAllySelect);
 document.getElementById('btn-skill').addEventListener('click', () => {
     if (battleViewState !== 'idle' || !currentEnemy) return;
     if (!isHeroActive()) { playSound('hit'); bMsg.textContent = `衣装奥義は勇者専用！ 勇者は編成にいない…`; return; } // 勇者が編成にいなければ使えない
-    if (activeFighter) { playSound('hit'); bMsg.textContent = `衣装奥義は勇者専用！ 交代中は使えない…`; return; } // 仲間と交代中は勇者専用の奥義は使えない
+    if (getFrontFighter() !== GameState.avatar) { playSound('hit'); bMsg.textContent = `衣装奥義は勇者専用！ 交代中は使えない…`; return; } // 勇者が現在の前衛でない間は使えない
     if (GameState.avatar.mp < 10) { playSound('hit'); bMsg.textContent = `MP不足！`; return; }
     GameState.avatar.mp -= 10; updateHeroHUD();
 
