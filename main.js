@@ -2764,13 +2764,15 @@ function drawGame() {
             let px = 100 - (Math.floor(i / 3) * 30), py = 300 + ((i % 3) * 60);
             drawFollowerSprite(follower, px, py, 0.9, true);
             // 仲間のHPバー(数値を持つ仲間のみ)。戦闘不能は赤いバーで示す。
+            // 枠線(strokeRect)は、canvasを非整数倍率で拡大表示した際にピクセル単位で途切れて見えることが
+            // あったため使わない。暗い背景矩形をわずかに大きく敷いてから塗りつぶす二重矩形で縁を表現する。
             if (typeof follower.hp === 'number' && typeof follower.maxHp === 'number') {
-                const barW = 40, barX = px - barW / 2, barY = py - 46;
+                const barW = 40, barH = 6, barX = px - barW / 2, barY = py - 47;
                 const pct = Math.max(0, follower.hp / follower.maxHp);
-                ctx.fillStyle = '#3a1010'; ctx.fillRect(barX, barY, barW, 5);
+                ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+                ctx.fillStyle = '#3a1010'; ctx.fillRect(barX, barY, barW, barH);
                 ctx.fillStyle = follower.hp <= 0 ? '#803030' : (pct < 0.3 ? '#e05a3a' : '#4fd06a');
-                ctx.fillRect(barX, barY, barW * pct, 5);
-                ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barW, 5);
+                ctx.fillRect(barX, barY, barW * pct, barH);
             }
             // 属性の対応色を小さな丸で示す(承認済みキャラのみ)
             if (follower.style && STYLE_COLORS[follower.style]) {
@@ -2809,13 +2811,15 @@ function drawGame() {
             drawSprite(ctx, frontFighter.sprite, hx, hy, { scale: isBattling ? 1.5 : 1 });
         }
         // 交代中は前衛の仲間にも小さなHPバーを出す(後衛グリッドと同じ見た目)
+        // 枠線(strokeRect)は非整数倍率での拡大表示時に途切れて見えることがあるため使わず、
+        // 後衛グリッドと同じく縁取り矩形の二重塗りで表現する。
         if (isBattling && activeFighter && typeof activeFighter.hp === 'number' && typeof activeFighter.maxHp === 'number') {
-            const barW = 50, barX = hx - barW / 2, barY = hy - 95;
+            const barW = 50, barH = 6, barX = hx - barW / 2, barY = hy - 96;
             const pct = Math.max(0, activeFighter.hp / activeFighter.maxHp);
-            ctx.fillStyle = '#3a1010'; ctx.fillRect(barX, barY, barW, 6);
+            ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+            ctx.fillStyle = '#3a1010'; ctx.fillRect(barX, barY, barW, barH);
             ctx.fillStyle = activeFighter.hp <= 0 ? '#803030' : (pct < 0.3 ? '#e05a3a' : '#4fd06a');
-            ctx.fillRect(barX, barY, barW * pct, 6);
-            ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barW, 6);
+            ctx.fillRect(barX, barY, barW * pct, barH);
             // 属性の対応色を小さな丸で示す(承認済みキャラのみ)
             if (activeFighter.style && STYLE_COLORS[activeFighter.style]) {
                 ctx.fillStyle = STYLE_COLORS[activeFighter.style];
