@@ -643,7 +643,8 @@ const GameState = {
     // フィールド拡張: 現在地と、ボス撃破/討伐数などのワールド進行(localStorageへ保存)
     currentFieldId: 'azurlight',
     // laundry: 泡織りの洗濯広場用の追加セーブ項目(既存項目とは独立、既存の保存方式は変更しない)
-    worldProgress: { defeatedBosses: {}, killCounts: {}, laundry: { detergent: 0, freeRestUsed: false, totalWins: 0, spotWinsAtGather: [null, null, null] } }
+    // rankPoints: プレイヤーランク用の累計ポイント(モンスター討伐・服の出品報酬受取で加算、既存項目には影響しない)
+    worldProgress: { defeatedBosses: {}, killCounts: {}, rankPoints: 0, laundry: { detergent: 0, freeRestUsed: false, totalWins: 0, spotWinsAtGather: [null, null, null] } }
 };
 let currentTrend = 'なし';
 
@@ -662,6 +663,7 @@ function loadWorldProgress() {
         if (parsed && typeof parsed === 'object') {
             GameState.worldProgress.defeatedBosses = parsed.defeatedBosses || {};
             GameState.worldProgress.killCounts = parsed.killCounts || {};
+            GameState.worldProgress.rankPoints = typeof parsed.rankPoints === 'number' ? parsed.rankPoints : 0;
             // laundry: 古いセーブデータ(この項目が無いもの)でも安全に初期値へフォールバックする
             const savedLaundry = parsed.laundry || {};
             GameState.worldProgress.laundry = {
@@ -674,6 +676,36 @@ function loadWorldProgress() {
     } catch (e) { /* 壊れた保存データは無視して初期状態を使う */ }
 }
 loadWorldProgress();
+
+// ==========================================
+// プレイヤーランク: モンスターを倒す・出品した服の報酬を受け取るたびにrankPointsが増え、
+// 一定の累計値ごとにランクが上がる。GameState.worldProgress.rankPointsに保存(既存の保存方式を流用)。
+// ==========================================
+const PLAYER_RANK_THRESHOLDS = [0, 50, 150, 350, 700, 1200, 2000, 3200];
+const PLAYER_RANK_NAMES = ['見習い冒険者', '駆け出し戦士', '一人前の戦士', '熟練の戦士', '手練れの英雄', '伝説の英雄', '神話級の勇者', '至高の勇者'];
+function playerRankIndex() {
+    const pts = GameState.worldProgress.rankPoints || 0;
+    let idx = 0;
+    for (let i = 0; i < PLAYER_RANK_THRESHOLDS.length; i++) { if (pts >= PLAYER_RANK_THRESHOLDS[i]) idx = i; }
+    return idx;
+}
+function updateRankUI() {
+    const idx = playerRankIndex();
+    const name = PLAYER_RANK_NAMES[idx] || PLAYER_RANK_NAMES[0];
+    const pts = GameState.worldProgress.rankPoints || 0;
+    const nextThreshold = PLAYER_RANK_THRESHOLDS[idx + 1];
+    const uiRank = document.getElementById('ui-rank');
+    const menuRank = document.getElementById('menu-rank');
+    if (uiRank) uiRank.textContent = name;
+    if (menuRank) menuRank.textContent = nextThreshold != null ? `${name}(${pts}/${nextThreshold}pt)` : `${name}(${pts}pt / MAX)`;
+}
+// モンスター討伐・服の出品報酬受取から呼ばれる。加算のたびに保存とHUD更新まで行う。
+function addRankPoints(amount) {
+    if (!amount) return;
+    GameState.worldProgress.rankPoints = (GameState.worldProgress.rankPoints || 0) + amount;
+    saveWorldProgress();
+    updateRankUI();
+}
 
 // ==========================================
 // 仲間パーティの永続化(localStorage、新規キー。既存のzsaga_world_progress_v1は変更しない)
@@ -1309,14 +1341,51 @@ Object.values(ULTIMATE_SKILLS).forEach(spec => {
     spec.preloadedImg = img;
 });
 
+// ==========================================
+// 衣装奥義(勇者専用だった「衣装奥義・シームブレイク」を、他の23人のキャラクターも使えるようにする)
+// 武装奥義(ULTIMATE_SKILLS)とは別枠のゲージ・ボタンで管理するので、同じ仲間が両方を交互に使い分けられる。
+// 専用VFX画像は用意していないため武装奥義と同じ画像を再利用し(preloadedImgも共用)、
+// 名前とキャラ個性色(CHARACTER_ROSTERのcolor、属性色ではない)で武装奥義と見分けられるようにする。
+// ==========================================
+const ALLY_COSTUME_RANK_MULTIPLIER = { C: 1.3, B: 1.4, A: 1.5, S: 1.6, SS: 1.7, SSS: 1.8 };
+const COSTUME_ULTIMATE_NAMES = {
+    c_gail: '裁ち衣・火裂きの正装', c_roto: '継ぎ衣・光の祝福', c_jin: '雷糸衣・疾風纏い', c_popo: '仕上げ衣・雷紋の正装',
+    b_bardo: '灼鋏衣・紅蓮纏衣', b_fiona: '氷紡衣・銀糸のヴェール', b_glen: '雷釦衣・守りの正装', b_lily: '夜布衣・闇夜のドレス',
+    a_leon: '黒鋏衣・漆黒の礼服', a_elena: '白絹衣・光輪のローブ', a_shion: '蒼氷衣・追跡のコート', a_valeria: '紅釦衣・炎騎のマント',
+    s_kayen: '黄金衣・裁きの正装', s_mira: '月紡衣・氷輪のドレス', s_luna: '若葉衣・光風のローブ', s_zex: '影雷衣・星屑のコート',
+    ss_asteria: '虹染衣・七彩の礼装', ss_ignis: '深紅衣・業火のドレス', ss_morgana: '夜布衣・月蝕のローブ', ss_veil: '銀型衣・永久のコート',
+    sss_seraphy: '王衣・天冠のドレス', sss_nocturne: '千色衣・万象のローブ', sss_eden: '星布衣・創世のマント'
+};
+const COSTUME_ULTIMATE_SKILLS = {};
+CHARACTER_ROSTER.forEach(c => {
+    const base = ULTIMATE_SKILLS[c.id];
+    if (!base) return;
+    COSTUME_ULTIMATE_SKILLS[c.id] = {
+        rank: base.rank,
+        skill: COSTUME_ULTIMATE_NAMES[c.id] || `${c.name}の衣装奥義`,
+        attribute: base.attribute,
+        image: base.image,
+        preloadedImg: base.preloadedImg,
+        color: c.color,
+        durationMs: base.durationMs,
+        impactAtMs: base.impactAtMs
+    };
+});
+
 // 奥義ゲージ(characterId → 0〜100)。戦闘中だけ有効な一時状態で、セーブデータには含めない。
 // 敵の反撃フェーズ(enemyCounterAttack)が呼ばれるたびに全員分を進め、使用したキャラだけ0に戻す。
+// 武装奥義(allyUltGauge)と衣装奥義(allyCostumeGauge)は別ゲージなので、同じキャラでも両方を独立して溜められる。
 let allyUltGauge = {};
+let allyCostumeGauge = {};
 const ALLY_ULT_GAUGE_PER_TURN = 34; // 約3ターンで満タン(100)になり、そのキャラだけ再使用できる
-function resetAllyUltimateGauges() { allyUltGauge = {}; }
+const ALLY_COSTUME_GAUGE_PER_TURN = 34;
+function resetAllyUltimateGauges() { allyUltGauge = {}; allyCostumeGauge = {}; }
 function chargeAllyUltimateGauges() {
     Object.keys(ULTIMATE_SKILLS).forEach(id => {
         allyUltGauge[id] = Math.min(100, (allyUltGauge[id] || 0) + ALLY_ULT_GAUGE_PER_TURN);
+    });
+    Object.keys(COSTUME_ULTIMATE_SKILLS).forEach(id => {
+        allyCostumeGauge[id] = Math.min(100, (allyCostumeGauge[id] || 0) + ALLY_COSTUME_GAUGE_PER_TURN);
     });
 }
 
@@ -1392,6 +1461,57 @@ function useAllyUltimate(ally) {
         } else {
             showDamage(600, 360, dmg);
             bMsg.textContent = `💥${ally.name}の武装奥義「${spec.skill}」！ ${dmg}のダメージ！`;
+        }
+    }, () => {
+        // durationMs終了: 演出状態を戻し、通常の後処理(勝利判定 or 敵の反撃)へ合流する
+        allyUltimateActive = null;
+        if (ally.sprite) ally.sprite.setAction('idle');
+        if (currentEnemy && currentEnemy.hp <= 0) { setTimeout(() => triggerCirculation(), 800); return; }
+        setTimeout(() => {
+            enemyCounterAttack(() => {
+                battleViewState = 'idle';
+                bActions.classList.remove('hidden');
+            });
+        }, 500);
+    });
+}
+
+// 「仲間を選ぶ」パネルから、選んだ仲間の衣装奥義を発動する(useAllyUltimateと同じ計算土台・常に貫通)。
+// ゲージは武装奥義とは別(allyCostumeGauge)なので、同じ仲間でも両方を独立して溜めて使い分けられる。
+function useAllyCostumeUltimate(ally) {
+    if (battleViewState !== 'idle' || !currentEnemy || allyUltimateActive) return;
+    if (typeof ally.hp === 'number' && ally.hp <= 0) return;
+    const id = ally.characterId;
+    const spec = id && COSTUME_ULTIMATE_SKILLS[id];
+    if (!spec) return;
+    if ((allyCostumeGauge[id] || 0) < 100) return; // ゲージ不足(連投防止)
+
+    allyCostumeGauge[id] = 0; // 消費
+    allySelectPanel.classList.add('hidden');
+    battleViewState = 'attacking';
+    playSound('magic');
+
+    const base = getAllyAttackBase(ally, 'select');
+    const rankMulti = ALLY_COSTUME_RANK_MULTIPLIER[spec.rank] || 1.4;
+    const rawDmg = Math.round(base * getAllyDamageMultiplier(ally) * getElementMultiplier(ally.style, currentEnemy.style) * rankMulti);
+    const isPiercing = true; // 衣装奥義は勇者のシームブレイクと同じく必ず貫通する
+
+    allyUltimateActive = { ally, characterId: id, spec, startedAt: performance.now() };
+    if (ally.sprite) ally.sprite.setAction('attack');
+
+    showUltimateVFX(spec, () => {
+        // impactAtMs: ダメージ判定はここで1回だけ
+        if (!currentEnemy) return; // 演出中に戦闘が終了済みなら何もしない(保険)
+        screenShakeTimer = Math.max(screenShakeTimer, 14);
+        const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
+        updateHPUI();
+        if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 6, flashFrames: 18, knockbackPower: 12, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
+        if (blocked) {
+            showDamage(600, 360, 0);
+            bMsg.textContent = `🛡️ ${ally.name}の攻撃は障壁に阻まれた！`;
+        } else {
+            showDamage(600, 360, dmg);
+            bMsg.textContent = `✨${ally.name}の衣装奥義「${spec.skill}」！ ${dmg}のダメージ！`;
         }
     }, () => {
         // durationMs終了: 演出状態を戻し、通常の後処理(勝利判定 or 敵の反撃)へ合流する
@@ -3718,6 +3838,7 @@ function startGame() {
     playFastEpicBGM(false); player.x = 190; player.y = 190; historyLog.length = 0; GameState.party = []; updateGold(0);
     loadPartyData(); // 保存済みの仲間(characterId・portraitPath・Lv等)があれば復元する
     loadActivePartyIds(); // 保存済みの冒険メンバー(最大4人)を復元する。無ければ所持キャラの先頭4人を初期値にする
+    updateRankUI(); // 保存済みのプレイヤーランクポイントをHUDに反映する
     GameState.avatar.sprite = new SpriteAnimator('hero', GameState.avatar.job);
     currentTrend = ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)]; // Init trend
     FieldAmbientAnimation.start('azurlight');
@@ -4348,6 +4469,22 @@ function openAllySelect() {
             allySelectPanel.appendChild(ultBtn);
         }
 
+        // 衣装奥義(勇者以外・全キャラ共通)。COSTUME_ULTIMATE_SKILLSに専用データがあるキャラだけボタンを出す。
+        // 武装奥義とは別ゲージ(allyCostumeGauge)なので、両方が同時に満タンになっていることもある。
+        const costumeSpec = ally.characterId ? COSTUME_ULTIMATE_SKILLS[ally.characterId] : null;
+        if (costumeSpec) {
+            const cGauge = allyCostumeGauge[ally.characterId] || 0;
+            const cReady = cGauge >= 100;
+            const costumeBtn = document.createElement('button');
+            costumeBtn.className = 'retro-btn cmd-btn ult-btn costume-ult-btn';
+            costumeBtn.textContent = cReady
+                ? `✨ 衣装奥義「${costumeSpec.skill}」発動！`
+                : `🔒 衣装奥義「${costumeSpec.skill}」(ゲージ${cGauge}%)`;
+            costumeBtn.disabled = !cReady;
+            if (cReady) costumeBtn.addEventListener('click', () => useAllyCostumeUltimate(ally));
+            allySelectPanel.appendChild(costumeBtn);
+        }
+
         if (ally !== activeFighter) {
             const swapBtn = document.createElement('button');
             swapBtn.className = 'retro-btn cmd-btn';
@@ -4543,6 +4680,7 @@ function triggerCirculation() {
     bMsg.textContent = `敵の体力が0になった！\n魂が光の粒子となって崩れていく…`;
     spawnParticles(600, 380);
     const reward = currentEnemy.goldDrop || 50; updateGold(reward);
+    addRankPoints(Math.max(1, Math.round(reward / 5))); // モンスターを倒すとプレイヤーランクポイントも増える
 
     // 勝利のたびに一定確率で回復薬を1個入手する(戦闘中の「アイテム(回復)」で実際に使える)
     const gotPotion = Math.random() < 0.3;
@@ -4753,6 +4891,7 @@ legacyNotif.addEventListener('click', () => {
     listing.status = 'completed';
     playSound('fanfare');
     updateGold(100);
+    addRankPoints(20); // 服を出品(売却)して報酬を受け取るとプレイヤーランクポイントも増える
     legacyText.textContent = '✨ 評価を確認しました。継承報酬 100 G を受け取りました。 ✨';
     updateListingUI();
     setTimeout(hideLegacyNotification, 1800);

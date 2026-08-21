@@ -640,6 +640,10 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 .cmd-btn.ult-btn:not(:disabled):hover { background: rgba(255, 212, 90, .12); }
 .cmd-btn.ult-btn:disabled { opacity: .5; cursor: default; filter: grayscale(60%); }
 
+/* 「仲間を選ぶ」パネル内の衣装奥義ボタン(武装奥義とは色違いで区別) */
+.cmd-btn.costume-ult-btn { border-color: #ff8fd6; color: #ffd6f0; }
+.cmd-btn.costume-ult-btn:not(:disabled):hover { background: rgba(255, 143, 214, .12); }
+
 /* ==========================================
    服の継承クエスト(既存のパーティー編成画面と同じ大画面パターンを踏襲)
    ========================================== */
