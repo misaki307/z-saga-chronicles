@@ -707,6 +707,60 @@ function loadWorldProgress() {
 loadWorldProgress();
 
 // ==========================================
+// ログイン継続用の永続化: 勇者本体・所持金・アイテム・現在フィールドを保存する。
+// これにより次回訪問時は祭壇画面(儀式)を出さず、保存済みの勇者だけですぐに再開できる。
+// 既存のworldProgress/party/activePartyIds等の保存方式・キーには一切触れない。
+// ==========================================
+const AVATAR_KEY = 'zsaga_avatar_v1';
+function saveAvatar() {
+    try {
+        const { sprite, ...rest } = GameState.avatar; // spriteはJSON化できないため除く(読込時に作り直す)
+        localStorage.setItem(AVATAR_KEY, JSON.stringify(rest));
+    } catch (e) { /* 保存できない環境では無視 */ }
+}
+function loadAvatar() {
+    try {
+        const raw = localStorage.getItem(AVATAR_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+}
+
+const GOLD_KEY = 'zsaga_gold_v1';
+function saveGold() { try { localStorage.setItem(GOLD_KEY, String(GameState.gold)); } catch (e) { /* 保存できない環境では無視 */ } }
+function loadGold() {
+    try { const raw = localStorage.getItem(GOLD_KEY); return raw !== null ? (parseInt(raw, 10) || 0) : null; } catch (e) { return null; }
+}
+
+const ITEMS_KEY = 'zsaga_items_v1';
+function saveItems() { try { localStorage.setItem(ITEMS_KEY, JSON.stringify(GameState.items)); } catch (e) { /* 保存できない環境では無視 */ } }
+function loadItems() {
+    try { const raw = localStorage.getItem(ITEMS_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+}
+
+const CURRENT_FIELD_KEY = 'zsaga_current_field_v1';
+function saveCurrentField() { try { localStorage.setItem(CURRENT_FIELD_KEY, GameState.currentFieldId); } catch (e) { /* 保存できない環境では無視 */ } }
+function loadCurrentField() { try { return localStorage.getItem(CURRENT_FIELD_KEY); } catch (e) { return null; } }
+
+// 渡された画像がすべて読み込み完了(または読み込み失敗)するまで待つ。タイムアウトで必ず解決する。
+// img.completeはブラウザネイティブのプロパティで、読み込み成功・失敗のどちらでもtrueになる。
+// フィールド表示・ログイン直後に「missing texture」のピンク市松模様が一瞬映るのを防ぐために使う。
+function waitForImagesReady(images, timeoutMs) {
+    const targets = images.filter(img => img && !img.complete);
+    if (targets.length === 0) return Promise.resolve();
+    return new Promise(resolve => {
+        let remaining = targets.length;
+        let done = false;
+        const finish = () => { if (!done) { done = true; resolve(); } };
+        const timer = setTimeout(finish, timeoutMs || 2500);
+        targets.forEach(img => {
+            const onDone = () => { remaining--; if (remaining <= 0) { clearTimeout(timer); finish(); } };
+            img.addEventListener('load', onDone, { once: true });
+            img.addEventListener('error', onDone, { once: true });
+        });
+    });
+}
+
+// ==========================================
 // プレイヤーランク: モンスターを倒す・出品した服の報酬を受け取るたびにrankPointsが増え、
 // 一定の累計値ごとにランクが上がる。GameState.worldProgress.rankPointsに保存(既存の保存方式を流用)。
 // ==========================================
@@ -1231,6 +1285,7 @@ function updateGold(amount) {
     GameState.gold += amount;
     document.getElementById('ui-gold').textContent = GameState.gold;
     document.getElementById('menu-gold').textContent = GameState.gold;
+    saveGold();
 }
 
 const ALL_STYLES = ['炎', '氷', '雷', '光', '闇']; // 新属性は増やさない(承認済みキャラクター仕様に合わせる)
@@ -2700,6 +2755,7 @@ function exitLaundryPlaza() {
     if (!isInLaundryPlaza) return;
     isInLaundryPlaza = false;
     GameState.currentFieldId = laundryReturnField || GameState.currentFieldId;
+    saveCurrentField();
     player.x = laundryReturnX; player.y = laundryReturnY; historyLog.length = 0;
     playSound('select');
     endBattleBGM(); // フェードアウト後、現在のフィールドBGMへ戻す共通処理を再利用(戦闘専用ではない)
@@ -3923,6 +3979,7 @@ function changeField(nextFieldId) {
 
     isInLaundryPlaza = false; // 広場内から移動メニューで別フィールドを選んだ場合、広場滞在状態を解除する
     GameState.currentFieldId = nextFieldId; // 背景はdrawGame()がcurrentFieldIdを見て次フレームから自動的に切り替わる
+    saveCurrentField();
     player.x = 400; player.y = 500; historyLog.length = 0;
     updateFieldDialogText();
     fx.switchFieldMusic(nextFieldId, audioBridge); // 背景更新の直後に必ず1回だけ呼ぶ
@@ -4017,25 +4074,64 @@ document.getElementById('clothing-upload').addEventListener('change', async (e) 
 
 function startGame() {
     playSound('select');
-    document.getElementById('ritual-screen').classList.replace('active', 'hidden'); document.getElementById('game-screen').classList.replace('hidden', 'active');
-    GameState.currentFieldId = 'azurlight'; // 新しい旅は常にアズライト大陸から(未解放フィールドはメニューから移動できる)
-    audioBridge.currentFieldMusicId = 'field-meadow';
+    // 保存済みの現在地があれば復元し、無ければ新規冒険として常にアズライト大陸から始める
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const restoredFieldId = loadCurrentField();
+    GameState.currentFieldId = (restoredFieldId && fx && fx.fields[restoredFieldId]) ? restoredFieldId : 'azurlight';
+    const fieldDef = fx && fx.fields[GameState.currentFieldId];
+    audioBridge.currentFieldMusicId = fieldDef ? fieldDef.music.id : 'field-meadow'; // 復元先フィールドの曲IDに合わせる(固定値のままだと復元後の移動でBGMが切り替わらなくなる)
     updateFieldDialogText();
-    playFastEpicBGM(false); player.x = 190; player.y = 190; historyLog.length = 0; GameState.party = []; updateGold(0);
+    // アズライト大陸の初期スポットは専用の190,190。復元先が別フィールドの場合はchangeField()と同じ入場位置を使う
+    if (GameState.currentFieldId === 'azurlight') { player.x = 190; player.y = 190; } else { player.x = 400; player.y = 500; }
+    historyLog.length = 0; GameState.party = [];
+
+    // 所持金・アイテムは保存済みの値があれば復元する(無ければ現在値=初期値のまま)
+    const restoredGold = loadGold();
+    if (restoredGold !== null) GameState.gold = restoredGold;
+    const restoredItems = loadItems();
+    if (restoredItems) GameState.items = restoredItems;
+    if (GameState.avatar.hp <= 0) GameState.avatar.hp = GameState.avatar.maxHp || 100; // 力尽きた状態のまま復元されるのを防ぐ
+
     loadPartyData(); // 保存済みの仲間(characterId・portraitPath・Lv等)があれば復元する
     loadActivePartyIds(); // 保存済みの冒険メンバー(最大4人)を復元する。無ければ所持キャラの先頭4人を初期値にする
     updateRankUI(); // 保存済みのプレイヤーランクポイントをHUDに反映する
     refreshMythicQuestUnlocks(); // 既に必要な循環ポイントへ達しているMYTHICクエストがあれば、ここで解放状態にする
     GameState.avatar.sprite = new SpriteAnimator('hero', GameState.avatar.job);
     currentTrend = ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)]; // Init trend
-    FieldAmbientAnimation.start('azurlight');
-    if (!gameLoopId) loop();
+
+    // キャラ・フィールドの画像が読み込み終わるまで祭壇画面のまま待ち、揃った瞬間にフィールドを表示する。
+    // 読み込み中に描画を始めると、まだ読み込めていないスプライトが「missing texture」のピンク市松模様で
+    // 一瞬だけ映ってしまう(sprites.jsのdrawMissingTexturePlaceholder)ため、それを避ける。
+    const heroImg = GameState.avatar.sprite.img;
+    const fieldImg = NEW_FIELD_BG_IMAGES[GameState.currentFieldId];
+    const partyImgs = getActivePartyResolved()
+        .filter(p => p !== GameState.avatar && p.sprite)
+        .map(p => p.sprite.img);
+    waitForImagesReady([heroImg, fieldImg, ...partyImgs], 2500).then(() => {
+        document.getElementById('ritual-screen').classList.replace('active', 'hidden');
+        document.getElementById('game-screen').classList.replace('hidden', 'active');
+        playFastEpicBGM(false);
+        updateGold(0); // 復元済みの所持金をui-gold/menu-goldの表示へ反映する
+        updateHeroHUD(); // 復元済みのHP/MP(ui-hp・戦闘HUD)とアイテム数をすぐに表示へ反映する
+        FieldAmbientAnimation.start(GameState.currentFieldId);
+        if (!gameLoopId) loop();
+        saveAvatar(); saveGold(); saveItems(); saveCurrentField(); // 今回の状態(新規作成時含む)をここで確実に保存する
+    });
 }
 document.getElementById('btn-start-adventure').addEventListener('click', startGame);
 document.getElementById('btn-skip').addEventListener('click', () => {
     GameState.avatar = { name: '伝説の紋章・ゼアル', job: '勇者', style: '炎', color: '#ff4500', hp: 150, maxHp: 150, mp: 100, maxMp: 100, agi: 80, tension: 50 };
     startGame(); updateGold(500);
 });
+
+// 起動時: 保存済みの勇者があれば、祭壇画面(儀式)を出さずそのまま冒険を再開する(自動ログイン)。
+// 保存が無い場合は何もせず、従来通り祭壇画面(active)がそのまま表示され、ユーザーの入力を待つ。
+(function tryAutoLogin() {
+    const savedAvatar = loadAvatar();
+    if (!savedAvatar) return;
+    GameState.avatar = { ...GameState.avatar, ...savedAvatar };
+    startGame();
+})();
 
 // ==========================================
 // BOTTLE MAIL & SHOP GACHA (伝説のクローゼット)
@@ -4265,12 +4361,14 @@ function updateHeroHUD() {
     if (heroMpText) heroMpText.textContent = Math.round(av.mp);
     document.getElementById('ui-hp').textContent = Math.round(av.hp);
     updateItemButtonLabel();
+    saveAvatar();
 }
 
 // 「アイテム(回復)」ボタンに現在の回復薬所持数を表示する
 function updateItemButtonLabel() {
     const btn = document.getElementById('btn-item');
     if (btn) btn.textContent = `▶ アイテム(回復薬×${(GameState.items && GameState.items.potion) || 0})`;
+    saveItems();
 }
 
 // 敵の反撃。A/Sランクほど発生しやすく、専用技（通常反撃の強化版）が出ることもある。
