@@ -3229,14 +3229,27 @@ function drawBattleArena(ctxObj) {
     ctxObj.beginPath(); ctxObj.ellipse(600, 397, 56, 16, 0, 0, Math.PI * 2); ctxObj.fill();
 }
 
+// 勇者の歩行用・戦闘用スプライトが未生成、または現在のjob(見た目)と一致しない場合に再生成する安全策。
+// 通常はstartGame()で1度だけ生成され、以後は書き換わらないはずだが、勇者はパーティーの何番目に
+// 編成されても(リーダー/追従/前衛/ベンチのどの位置でも)必ず本人が描画されるよう、
+// 毎フレームの描画直前にここで有効な状態を保証してから使う(キャラID・画像パス自体はSPRITE_MANIFEST.heroの
+// 定義通りで変更しない)。
+function ensureHeroSprite() {
+    if (!GameState.avatar.sprite || GameState.avatar.sprite.key !== GameState.avatar.job) {
+        GameState.avatar.sprite = new SpriteAnimator('hero', GameState.avatar.job);
+    }
+    return GameState.avatar.sprite;
+}
+
 function updateAllSprites() {
-    if (GameState.avatar.sprite) GameState.avatar.sprite.update();
+    ensureHeroSprite().update();
     getActiveParty().forEach(p => { if (p.sprite) p.sprite.update(); });
     if (currentEnemy && currentEnemy.sprite) currentEnemy.sprite.update();
     if (fsBoss && fsBoss.sprite) fsBoss.sprite.update();
 }
 
 function drawGame() {
+    ensureHeroSprite(); // 勇者がフィールド/戦闘のどの位置(リーダー/追従/前衛/ベンチ)にいても必ず描画できるようにする
     ctx.save();
     if (screenShakeTimer > 0) ctx.translate((Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
