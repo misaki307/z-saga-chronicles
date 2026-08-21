@@ -1269,6 +1269,144 @@ const PORTRAIT_BBOX = {
     sss_nocturne: { x0: 43, y0: 18, x1: 212, y1: 238 },
     sss_eden:     { x0: 42, y0: 18, x1: 214, y1: 238 }
 };
+// ==========================================
+// 武装奥義(勇者以外・全キャラ共通)
+// キャラごとに固有の名前・属性・専用VFX画像(assets/effects/ultimates/<rank>/<id>.png)を持つ。
+// 威力はランクに応じた倍率(ALLY_ULTIMATE_RANK_MULTIPLIER)を基本ダメージへ掛ける。
+// 演出のdurationMs/impactAtMsもランクが上がるほど長く・派手になるよう調整済み。
+// ==========================================
+const ALLY_ULTIMATE_RANK_MULTIPLIER = { C: 1.35, B: 1.45, A: 1.55, S: 1.65, SS: 1.75, SSS: 1.85 };
+const ULTIMATE_SKILLS = {
+    c_gail:       { rank: 'C',   skill: '火縫い十字断',       attribute: '炎', image: 'assets/effects/ultimates/C/c_gail.png',       color: '#ff6438', durationMs: 720,  impactAtMs: 360 },
+    c_roto:       { rank: 'C',   skill: '一針の希望',         attribute: '光', image: 'assets/effects/ultimates/C/c_roto.png',       color: '#fff1bd', durationMs: 720,  impactAtMs: 360 },
+    c_jin:        { rank: 'C',   skill: '雷糸の鉤縫い',       attribute: '雷', image: 'assets/effects/ultimates/C/c_jin.png',        color: '#ffd83d', durationMs: 740,  impactAtMs: 370 },
+    c_popo:       { rank: 'C',   skill: '仕上げの布槌',       attribute: '雷', image: 'assets/effects/ultimates/C/c_popo.png',       color: '#f0a43c', durationMs: 740,  impactAtMs: 380 },
+    b_bardo:      { rank: 'B',   skill: '灼熱鋏円舞',         attribute: '炎', image: 'assets/effects/ultimates/B/b_bardo.png',      color: '#ff3f24', durationMs: 820,  impactAtMs: 420 },
+    b_fiona:      { rank: 'B',   skill: '氷紡の予言陣',       attribute: '氷', image: 'assets/effects/ultimates/B/b_fiona.png',      color: '#61d7ff', durationMs: 840,  impactAtMs: 440 },
+    b_glen:       { rank: 'B',   skill: '雷釦・四重守護',     attribute: '雷', image: 'assets/effects/ultimates/B/b_glen.png',       color: '#f5d25a', durationMs: 840,  impactAtMs: 430 },
+    b_lily:       { rank: 'B',   skill: '夜布リボン乱舞',     attribute: '闇', image: 'assets/effects/ultimates/B/b_lily.png',       color: '#b964ff', durationMs: 860,  impactAtMs: 450 },
+    a_leon:       { rank: 'A',   skill: '黒鋏・深紅穿ち',     attribute: '闇', image: 'assets/effects/ultimates/A/a_leon.png',       color: '#d62e4b', durationMs: 940,  impactAtMs: 490 },
+    a_elena:      { rank: 'A',   skill: '白絹銀針・花天',     attribute: '光', image: 'assets/effects/ultimates/A/a_elena.png',      color: '#e9f5ff', durationMs: 960,  impactAtMs: 500 },
+    a_shion:      { rank: 'A',   skill: '蒼氷糸・追跡連弩',   attribute: '氷', image: 'assets/effects/ultimates/A/a_shion.png',      color: '#55adff', durationMs: 940,  impactAtMs: 480 },
+    a_valeria:    { rank: 'A',   skill: '紅釦騎槍・炎縫突',   attribute: '炎', image: 'assets/effects/ultimates/A/a_valeria.png',    color: '#ff593f', durationMs: 960,  impactAtMs: 500 },
+    s_kayen:      { rank: 'S',   skill: '黄金雷裁・双鋏輪',   attribute: '雷', image: 'assets/effects/ultimates/S/s_kayen.png',      color: '#ffd438', durationMs: 1080, impactAtMs: 570 },
+    s_mira:       { rank: 'S',   skill: '月氷紡・輪廻の糸',   attribute: '氷', image: 'assets/effects/ultimates/S/s_mira.png',       color: '#a8c9ff', durationMs: 1100, impactAtMs: 590 },
+    s_luna:       { rank: 'S',   skill: '若葉天布・光扇舞',   attribute: '光', image: 'assets/effects/ultimates/S/s_luna.png',       color: '#78df75', durationMs: 1100, impactAtMs: 580 },
+    s_zex:        { rank: 'S',   skill: '影雷双針・星座縫い', attribute: '闇', image: 'assets/effects/ultimates/S/s_zex.png',        color: '#4cd5e5', durationMs: 1080, impactAtMs: 560 },
+    ss_asteria:   { rank: 'SS',  skill: '虹染めの奥義・七彩織界', attribute: '光', image: 'assets/effects/ultimates/SS/ss_asteria.png', color: '#ff5bd4', durationMs: 1260, impactAtMs: 670 },
+    ss_ignis:     { rank: 'SS',  skill: '紅蓮蒸着・業火大圧', attribute: '炎', image: 'assets/effects/ultimates/SS/ss_ignis.png',    color: '#ff3d26', durationMs: 1240, impactAtMs: 650 },
+    ss_morgana:   { rank: 'SS',  skill: '夜布蝕輪・月断ち',   attribute: '闇', image: 'assets/effects/ultimates/SS/ss_morgana.png',  color: '#a34cff', durationMs: 1280, impactAtMs: 680 },
+    ss_veil:      { rank: 'SS',  skill: '六銀針・永久型紙陣', attribute: '氷', image: 'assets/effects/ultimates/SS/ss_veil.png',     color: '#9ce2ff', durationMs: 1260, impactAtMs: 670 },
+    sss_seraphy:  { rank: 'SSS', skill: '王衣神縫・天冠結界', attribute: '光', image: 'assets/effects/ultimates/SSS/sss_seraphy.png', color: '#ffe47a', durationMs: 1540, impactAtMs: 820 },
+    sss_nocturne: { rank: 'SSS', skill: '千色神機・万象織滅', attribute: '闇', image: 'assets/effects/ultimates/SSS/sss_nocturne.png', color: '#d95cff', durationMs: 1600, impactAtMs: 850 },
+    sss_eden:     { rank: 'SSS', skill: '創世星布・天穿彗刃', attribute: '炎', image: 'assets/effects/ultimates/SSS/sss_eden.png',   color: '#ff7042', durationMs: 1580, impactAtMs: 840 }
+};
+// 各キャラのVFX画像を先読みしておく(戦闘開始を待たず、ロード時に一度だけ)
+Object.values(ULTIMATE_SKILLS).forEach(spec => {
+    const img = new Image();
+    img.onerror = () => console.warn(`[ultimate] 画像の読込に失敗: ${spec.image}`);
+    img.src = spec.image;
+    spec.preloadedImg = img;
+});
+
+// 奥義ゲージ(characterId → 0〜100)。戦闘中だけ有効な一時状態で、セーブデータには含めない。
+// 敵の反撃フェーズ(enemyCounterAttack)が呼ばれるたびに全員分を進め、使用したキャラだけ0に戻す。
+let allyUltGauge = {};
+const ALLY_ULT_GAUGE_PER_TURN = 34; // 約3ターンで満タン(100)になり、そのキャラだけ再使用できる
+function resetAllyUltimateGauges() { allyUltGauge = {}; }
+function chargeAllyUltimateGauges() {
+    Object.keys(ULTIMATE_SKILLS).forEach(id => {
+        allyUltGauge[id] = Math.min(100, (allyUltGauge[id] || 0) + ALLY_ULT_GAUGE_PER_TURN);
+    });
+}
+
+// 発動中の武装奥義(1件のみ・多重発動防止)。drawFollowerSprite側がこれを見て、
+// 該当キャラの実在ポートレートへ拡大・踏み込み・発光・残像を重ねる(専用コマ送り素材は使わない)。
+let allyUltimateActive = null; // { ally, characterId, spec, startedAt }
+
+// VFXレイヤーをDOM層(#game-container)に表示し、impactAtMsで1回だけダメージ処理を、
+// durationMs終了時に後片付けとonCompleteを呼ぶ。画像・名前(HTML文字)ともにキャラ専用。
+function showUltimateVFX(spec, onImpact, onComplete) {
+    const host = document.getElementById('game-container');
+    if (!host) { onImpact(); onComplete(); return; }
+    const rankCls = spec.rank.toLowerCase();
+    const layer = document.createElement('div');
+    layer.className = `ultimate-vfx-layer is-${rankCls}`;
+    layer.style.setProperty('--vfx-duration', `${spec.durationMs}ms`);
+    layer.style.setProperty('--vfx-color', spec.color);
+    const img = document.createElement('img');
+    img.className = 'ultimate-vfx-image';
+    img.src = spec.image;
+    img.alt = '';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'ultimate-vfx-name';
+    nameEl.textContent = spec.skill;
+    layer.appendChild(img);
+    layer.appendChild(nameEl);
+    host.appendChild(layer);
+    host.classList.add('ultimate-vfx-shake', `shake-${rankCls}`);
+    let impactFired = false;
+    setTimeout(() => { if (!impactFired) { impactFired = true; onImpact(); } }, spec.impactAtMs);
+    setTimeout(() => {
+        layer.remove();
+        host.classList.remove('ultimate-vfx-shake', `shake-${rankCls}`);
+        if (!impactFired) { impactFired = true; onImpact(); } // 保険: 万一impactAtMs前に終了時間へ到達しても必ず1回は適用する
+        onComplete();
+    }, spec.durationMs);
+}
+
+// 「仲間を選ぶ」パネルから、選んだ仲間の武装奥義を発動する。ダメージ計算式の土台
+// (getAllyAttackBase/getAllyDamageMultiplier/getElementMultiplier)は通常攻撃・指名攻撃と同じものを
+// 使い、ランク別倍率(ALLY_ULTIMATE_RANK_MULTIPLIER)だけを追加で掛ける。常に貫通(勇者の衣装奥義と同じ扱い)。
+function useAllyUltimate(ally) {
+    if (battleViewState !== 'idle' || !currentEnemy || allyUltimateActive) return;
+    if (typeof ally.hp === 'number' && ally.hp <= 0) return;
+    const id = ally.characterId;
+    const spec = id && ULTIMATE_SKILLS[id];
+    if (!spec) return;
+    if ((allyUltGauge[id] || 0) < 100) return; // ゲージ不足(連投防止)
+
+    allyUltGauge[id] = 0; // 消費
+    allySelectPanel.classList.add('hidden');
+    battleViewState = 'attacking';
+    playSound('magic');
+
+    const base = getAllyAttackBase(ally, 'select');
+    const rankMulti = ALLY_ULTIMATE_RANK_MULTIPLIER[spec.rank] || 1.5;
+    const rawDmg = Math.round(base * getAllyDamageMultiplier(ally) * getElementMultiplier(ally.style, currentEnemy.style) * rankMulti);
+    const isPiercing = true; // 武装奥義は勇者の衣装奥義と同じく必ず貫通する
+
+    allyUltimateActive = { ally, characterId: id, spec, startedAt: performance.now() };
+    if (ally.sprite) ally.sprite.setAction('attack');
+
+    showUltimateVFX(spec, () => {
+        // impactAtMs: ダメージ判定はここで1回だけ
+        if (!currentEnemy) return; // 演出中に戦闘が終了済みなら何もしない(保険)
+        screenShakeTimer = Math.max(screenShakeTimer, 14);
+        const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
+        updateHPUI();
+        if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 6, flashFrames: 18, knockbackPower: 12, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
+        if (blocked) {
+            showDamage(600, 360, 0);
+            bMsg.textContent = `🛡️ ${ally.name}の攻撃は障壁に阻まれた！`;
+        } else {
+            showDamage(600, 360, dmg);
+            bMsg.textContent = `💥${ally.name}の武装奥義「${spec.skill}」！ ${dmg}のダメージ！`;
+        }
+    }, () => {
+        // durationMs終了: 演出状態を戻し、通常の後処理(勝利判定 or 敵の反撃)へ合流する
+        allyUltimateActive = null;
+        if (ally.sprite) ally.sprite.setAction('idle');
+        if (currentEnemy && currentEnemy.hp <= 0) { setTimeout(() => triggerCirculation(), 800); return; }
+        setTimeout(() => {
+            enemyCounterAttack(() => {
+                battleViewState = 'idle';
+                bActions.classList.remove('hidden');
+            });
+        }, 500);
+    });
+}
+
 // 召喚結果ポートレートに、キャラごとのbboxを元にした background-size/position を適用する。
 // 画像は一切加工せず、CSSのcustom propertyだけを書き換えて表示上の背丈・足元位置を揃える。
 function applyPortraitCrop(el, characterId) {
@@ -1465,7 +1603,7 @@ function playAsteriaSkillSequence(ally, rawDmg, isPiercing, onComplete) {
 // ダメージ計算式・MP消費・スキル効果自体はここでは一切変更しない。
 // 「いつ・どう見せるか」の演出タイミングだけを追加し、命中(5コマ目)で1回だけダメージを適用する。
 // ==========================================
-const LUNA_NAME = '若葉布の採寸弓師・ルーナ';
+const LUNA_NAME = '若葉布舞・ルーナ'; // CHARACTER_ROSTER(main.js内 s_luna)の実際の名前と一致させる(旧名では一致せず未発動だった)
 const LUNA_ATLAS_ROW = 1; // 2行目 = ルーナ (0行目=アステア)
 const LUNA_SKILL_FRAMES = ['ready', 'charge_1', 'charge_2', 'action', 'impact', 'recover'];
 const LUNA_SKILL_GLOW_COLOR = '#ffe066'; // 黄色いメジャー状の光
@@ -2195,14 +2333,38 @@ function drawFollowerSprite(follower, x, y, scale, isBattleContext) {
         ctx.restore();
         return;
     }
+    // 武装奥義(全キャラ共通・専用コマ送り素材なし): 発動中の本人だけ、実在のポートレート/スプライトに
+    // 拡大(膨らみ)・踏み込み・発光・残像を重ねて動かす。画像そのものは加工しない。
+    let ultDrawX = x, ultDrawScale = scale;
+    if (allyUltimateActive && allyUltimateActive.ally === follower) {
+        const spec = allyUltimateActive.spec;
+        const t = Math.min(1, (performance.now() - allyUltimateActive.startedAt) / spec.durationMs);
+        const lunge = Math.sin(Math.min(1, t / 0.55) * Math.PI) * 28; // 前半で踏み込み、後半で戻る
+        const pulse = 1 + Math.sin(Math.min(1, t) * Math.PI) * 0.3;   // 発動中いっぱいに膨らんで収まる
+        ultDrawX = x + lunge;
+        ultDrawScale = scale * pulse;
+        if (isBattleContext && follower.portraitPath) {
+            const baseCell = follower.sprite ? follower.sprite.cell : 48;
+            const heightPx = baseCell * ultDrawScale;
+            ctx.save();
+            ctx.globalAlpha = 0.14; drawCharacterPortrait(ctx, follower, ultDrawX - lunge * 0.6, y, heightPx * 0.95);
+            ctx.globalAlpha = 0.26; drawCharacterPortrait(ctx, follower, ultDrawX - lunge * 0.3, y, heightPx * 0.98);
+            ctx.restore();
+        }
+        const glowR = 48 * pulse;
+        const grad = ctx.createRadialGradient(ultDrawX, y - 34, 4, ultDrawX, y - 34, glowR);
+        grad.addColorStop(0, spec.color); grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(ultDrawX, y - 34, glowR, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    }
     // 承認済みキャラは戦闘画面だけportraitPathを使う(フィールド追従は既存の歩行アニメーションのまま)。
     // ボタンやHP表示を隠さないよう、既存の歩行スプライトとほぼ同じ高さに収める。
     if (isBattleContext && follower.portraitPath) {
         const baseCell = follower.sprite ? follower.sprite.cell : 48;
-        if (drawCharacterPortrait(ctx, follower, x, y, baseCell * scale)) return;
+        if (drawCharacterPortrait(ctx, follower, ultDrawX, y, baseCell * ultDrawScale)) return;
     }
     if (!follower.sprite) return;
-    drawSprite(ctx, follower.sprite, x, y, { scale });
+    drawSprite(ctx, follower.sprite, ultDrawX, y, { scale: ultDrawScale });
     } finally {
         ctx.restore();
     }
@@ -3383,6 +3545,7 @@ function applyCounterDamage(target, dmg, isSpecial) {
 }
 
 function enemyCounterAttack(onDone) {
+    chargeAllyUltimateGauges(); // 1ターン経過ごとに全員の武装奥義ゲージを進める(戦闘中のみの一時状態)
     if (!currentEnemy || currentEnemy.hp <= 0) { if (onDone) onDone(); return; }
     const counterChance = currentEnemy.tier === 'boss' ? 0.45 : (currentEnemy.tier === 'mid' ? 0.30 : 0.15);
     if (Math.random() > counterChance) { if (onDone) onDone(); return; }
@@ -3465,7 +3628,7 @@ document.getElementById('btn-recovery-return').addEventListener('click', () => {
 function startEncounter() {
     if (isMenuOpen || isShopOpen || isFashionShow) return; isBattling = true; keys['ArrowUp'] = keys['ArrowDown'] = keys['ArrowLeft'] = keys['ArrowRight'] = false;
     BGMManager.stop(); playSound('noise'); document.getElementById('game-screen').classList.add('screen-shake'); document.getElementById('encounter-effect').classList.remove('hidden');
-    attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0;
+    attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0; resetAllyUltimateGauges();
     setTimeout(() => {
         document.getElementById('game-screen').classList.remove('screen-shake'); document.getElementById('encounter-effect').classList.add('hidden');
         currentEnemy = generateEnemy(); battleViewState = 'idle'; updateHPUI(); updateHeroHUD(); // 敵の属性は勇者と同じにせず、毎回ランダムにする
@@ -3505,7 +3668,7 @@ function startFieldBossEncounter(fieldId) {
     if (isMenuOpen || isShopOpen || isFashionShow || isBattling) return;
     isBattling = true; keys['ArrowUp'] = keys['ArrowDown'] = keys['ArrowLeft'] = keys['ArrowRight'] = false;
     BGMManager.stop(); playSound('noise'); document.getElementById('game-screen').classList.add('screen-shake'); document.getElementById('encounter-effect').classList.remove('hidden');
-    attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0;
+    attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0; resetAllyUltimateGauges();
     setTimeout(() => {
         document.getElementById('game-screen').classList.remove('screen-shake'); document.getElementById('encounter-effect').classList.add('hidden');
         currentEnemy = buildFieldBoss(fieldId); battleViewState = 'idle'; updateHPUI(); updateHeroHUD();
@@ -3700,6 +3863,22 @@ function openAllySelect() {
         btn.textContent = `▶ ${ally.name} [${ally.job} Lv.${ally.level || 1}${hpLabel}]`;
         btn.addEventListener('click', () => commandAllyAttack(ally));
         allySelectPanel.appendChild(btn);
+
+        // 武装奥義(勇者以外・全キャラ共通)。ULTIMATE_SKILLSに専用データがあるキャラだけボタンを出す。
+        // ゲージ(戦闘中のみの一時状態)が満タンでないと押せない。
+        const ultSpec = ally.characterId ? ULTIMATE_SKILLS[ally.characterId] : null;
+        if (ultSpec) {
+            const gauge = allyUltGauge[ally.characterId] || 0;
+            const ready = gauge >= 100;
+            const ultBtn = document.createElement('button');
+            ultBtn.className = 'retro-btn cmd-btn ult-btn';
+            ultBtn.textContent = ready
+                ? `💥 武装奥義「${ultSpec.skill}」発動！`
+                : `🔒 武装奥義「${ultSpec.skill}」(ゲージ${gauge}%)`;
+            ultBtn.disabled = !ready;
+            if (ready) ultBtn.addEventListener('click', () => useAllyUltimate(ally));
+            allySelectPanel.appendChild(ultBtn);
+        }
 
         if (ally !== activeFighter) {
             const swapBtn = document.createElement('button');

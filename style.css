@@ -580,3 +580,68 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 @keyframes gameover-flash { 0% { text-shadow: 0 0 5px #ff3b3b; } 100% { text-shadow: 0 0 20px #fff, 0 0 30px #ff3b3b; } }
 .recovery-box { background: rgba(0,200,255,0.1); padding: 20px; margin: 20px 0; border: 2px dashed #5cf; color: #bfeeff; }
 @keyframes p-flash { 0% { text-shadow: 0 0 5px #ffaa00; } 100% { text-shadow: 0 0 20px #fff, 0 0 30px #ffaa00; } }
+
+/* ==========================================
+   武装奥義VFX(勇者以外の仲間・全キャラ共通)
+   専用のコマ送り素材は使わず、キャラごとの透過VFX画像(assets/effects/ultimates)を
+   #game-container全体に重ねるDOM層として表示する。中心配置・縦横比維持(object-fit:contain)・
+   image-rendering:pixelated。ランク(C〜SSS)が高いほどサイズ・発光・画面振動を豪華にする。
+   ========================================== */
+.ultimate-vfx-layer {
+  position: absolute; inset: 0; z-index: 90; overflow: hidden; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+}
+.ultimate-vfx-layer::before {
+  content: ""; position: absolute; inset: 0; background: rgba(2,4,14,.6);
+  animation: ultimate-dim var(--vfx-duration, 900ms) ease-out both;
+}
+.ultimate-vfx-image {
+  position: relative; object-fit: contain; image-rendering: pixelated;
+  width: min(56vmin, 340px); height: min(56vmin, 340px);
+  filter: drop-shadow(0 0 10px var(--vfx-color, #fff));
+  animation: ultimate-burst var(--vfx-duration, 900ms) cubic-bezier(.18,.8,.24,1) both;
+}
+.ultimate-vfx-name {
+  position: relative; font-family: 'DotGothic16', monospace; color: #fff2bd;
+  text-shadow: 2px 2px #07101e, 0 0 12px var(--vfx-color, #21ddec); letter-spacing: 2px;
+  font-size: 20px; text-align: center; padding: 0 12px;
+  animation: ultimate-name-pop var(--vfx-duration, 900ms) ease-out both;
+}
+/* ランクごとの豪華さの段階付け(サイズ・発光・振動) */
+.ultimate-vfx-layer.is-b .ultimate-vfx-image { width: min(60vmin, 370px); height: min(60vmin, 370px); }
+.ultimate-vfx-layer.is-a .ultimate-vfx-image { width: min(64vmin, 400px); height: min(64vmin, 400px); filter: drop-shadow(0 0 13px var(--vfx-color, #fff)); }
+.ultimate-vfx-layer.is-s .ultimate-vfx-image { width: min(68vmin, 440px); height: min(68vmin, 440px); filter: drop-shadow(0 0 15px var(--vfx-color, #fff)); }
+.ultimate-vfx-layer.is-ss .ultimate-vfx-image { width: min(76vmin, 500px); height: min(76vmin, 500px); filter: drop-shadow(0 0 20px var(--vfx-color, #fff)); }
+.ultimate-vfx-layer.is-sss .ultimate-vfx-image { width: min(86vmin, 580px); height: min(86vmin, 580px); filter: drop-shadow(0 0 26px var(--vfx-color, #fff)) drop-shadow(0 0 44px var(--vfx-color, #fff)); }
+.ultimate-vfx-layer.is-s .ultimate-vfx-name, .ultimate-vfx-layer.is-ss .ultimate-vfx-name { font-size: 22px; }
+.ultimate-vfx-layer.is-sss .ultimate-vfx-name { font-size: 25px; color: #fff6d8; }
+.ultimate-vfx-shake { animation: ultimate-shake-c 420ms linear both; }
+.ultimate-vfx-shake.shake-b { animation-name: ultimate-shake-b; }
+.ultimate-vfx-shake.shake-a { animation-name: ultimate-shake-a; }
+.ultimate-vfx-shake.shake-s { animation-name: ultimate-shake-s; }
+.ultimate-vfx-shake.shake-ss { animation-name: ultimate-shake-ss; }
+.ultimate-vfx-shake.shake-sss { animation-name: ultimate-shake-sss; animation-duration: 620ms; }
+@keyframes ultimate-burst {
+  0% { opacity: 0; transform: scale(.25) rotate(-8deg); }
+  22% { opacity: 1; transform: scale(1.08) rotate(2deg); }
+  58% { opacity: 1; transform: scale(.98) rotate(0); }
+  100% { opacity: 0; transform: scale(1.18) rotate(3deg); }
+}
+@keyframes ultimate-name-pop {
+  0%, 14% { opacity: 0; transform: translateY(10px) scale(.85); }
+  26% { opacity: 1; transform: translateY(0) scale(1); }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes ultimate-dim { 0%, 100% { opacity: 0; } 18%, 68% { opacity: 1; } }
+@keyframes ultimate-shake-c { 0%,100%{transform:translate(0)} 25%{transform:translate(-3px,1px)} 50%{transform:translate(3px,-1px)} 75%{transform:translate(-2px,-1px)} }
+@keyframes ultimate-shake-b { 0%,100%{transform:translate(0)} 25%{transform:translate(-4px,2px)} 50%{transform:translate(4px,-2px)} 75%{transform:translate(-3px,-1px)} }
+@keyframes ultimate-shake-a { 0%,100%{transform:translate(0)} 20%{transform:translate(-5px,2px)} 40%{transform:translate(5px,-2px)} 60%{transform:translate(-3px,-1px)} 80%{transform:translate(3px,1px)} }
+@keyframes ultimate-shake-s { 0%,100%{transform:translate(0)} 20%{transform:translate(-6px,3px)} 40%{transform:translate(6px,-3px)} 60%{transform:translate(-4px,-2px)} 80%{transform:translate(4px,2px)} }
+@keyframes ultimate-shake-ss { 0%,100%{transform:translate(0)} 15%{transform:translate(-7px,3px)} 35%{transform:translate(7px,-3px)} 55%{transform:translate(-5px,-2px)} 75%{transform:translate(5px,2px)} 90%{transform:translate(-3px,1px)} }
+@keyframes ultimate-shake-sss { 0%,100%{transform:translate(0)} 12%{transform:translate(-9px,4px)} 30%{transform:translate(9px,-4px)} 48%{transform:translate(-7px,-3px)} 66%{transform:translate(7px,3px)} 82%{transform:translate(-4px,-2px)} 94%{transform:translate(4px,2px)} }
+
+/* 「仲間を選ぶ」パネル内の武装奥義ボタン */
+.cmd-btn.ult-btn { border-color: #ffd45a; color: #ffe9a8; }
+.cmd-btn.ult-btn:not(:disabled):hover { background: rgba(255, 212, 90, .12); }
+.cmd-btn.ult-btn:disabled { opacity: .5; cursor: default; filter: grayscale(60%); }
