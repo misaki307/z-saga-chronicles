@@ -1301,6 +1301,90 @@ const PORTRAIT_BBOX = {
     sss_nocturne: { x0: 43, y0: 18, x1: 212, y1: 238 },
     sss_eden:     { x0: 42, y0: 18, x1: 214, y1: 238 }
 };
+
+// ==========================================
+// MYTHIC(神話継承): 通常ガチャ・CHARACTER_ROSTER/CHARACTER_POOLとは完全に別枠のキャラクター3人。
+// ガチャには一切登場せず、循環ポイント(InheritanceState.circulationPoints、既存の値をそのまま読む・
+// 別の循環ポイントは作らない)が閾値に達すると本人がボスとして挑戦できるようになり、
+// 撃破した場合だけ本人が所持キャラクター一覧(GameState.party)へ加入する。
+// attribute(JSON上はlight/water/dark)は既存5属性(炎/氷/雷/光/闇。新属性は追加しない)へ
+// light→光、water→氷(見た目のみ「水」寄りの演出、内部属性計算は氷と同じ)、dark→闇として対応させる。
+// ==========================================
+const MYTHIC_CHARACTERS = [
+    {
+        id: 'mythic_alcyon', name: '天継の王裁・アルシオン', attribute: '光', role: '王裁騎士',
+        unlockPoints: 500, questId: 'mythic_quest_alcyon', questTitle: '神話継承Ⅰ　星を裁つ王',
+        image: 'assets/characters/mythic/alcyon.png', color: '#2f4f9c',
+        boss: { hpMulti: 1.35, atkMulti: 1.12, phases: 2, mechanicText: '光る金糸を先に断たないと本体への通常攻撃が軽減される。必殺技(貫通攻撃)で断ち切ろう。' },
+        skill: { name: '天縫奥義・星界裁断', description: '巨大な王裁鋏で星糸を断ち、大ダメージ。味方全体へ一度だけ被ダメージ軽減を付与する。', effectTheme: 'navy_gold_scissors_constellation_threads', color: '#ffd45a' },
+        joinMessage: '見事だ。次は私の裁断で、君たちの旅路を切り拓こう。'
+    },
+    {
+        id: 'mythic_celestia', name: '星織の女皇・セレスティア', attribute: '氷', role: '星織女皇',
+        unlockPoints: 1200, questId: 'mythic_quest_celestia', questTitle: '神話継承Ⅱ　星海を織る女皇',
+        image: 'assets/characters/mythic/celestia.png', color: '#7a4fc9',
+        boss: { hpMulti: 1.65, atkMulti: 1.2, phases: 3, mechanicText: '星布の色に対応する属性の攻撃でなければ結界を解けず、放っておくと自己回復と全体攻撃を繰り返す。' },
+        skill: { name: '星織奥義・天衣創世', description: '星海の布を織り上げ大ダメージ。味方全体を回復し、女皇の封印を打ち消す。', effectTheme: 'violet_cyan_loom_aurora_ribbons', color: '#7ce0ff' },
+        joinMessage: 'あなたの想いは確かに織り上がりました。私も旅の一糸となりましょう。'
+    },
+    {
+        id: 'mythic_noctis', name: '輪廻布の黒冠・ノクティス', attribute: '闇', role: '黒冠継承者',
+        unlockPoints: 2500, questId: 'mythic_quest_noctis', questTitle: '神話継承Ⅲ　忘却を纏う黒冠',
+        image: 'assets/characters/mythic/noctis.png', color: '#7a1f2b',
+        boss: { hpMulti: 2.0, atkMulti: 1.3, phases: 3, mechanicText: '破れた外套を再縫製し一度だけ復活する。必殺技(貫通攻撃)を当てておけば再縫製の核を破壊し復活を防げる。' },
+        skill: { name: '黒環奥義・不滅再縫', description: '黒環の縫い糸で大ダメージを与え、その一部を味方全体のHPとして還元する。戦闘中一度だけ戦闘不能を耐える。', effectTheme: 'black_crimson_eclipse_needles_phoenix_cloth', color: '#ff3d5a' },
+        joinMessage: '捨てられた記憶まで背負う覚悟、見届けた。黒冠の力を預けよう。'
+    }
+];
+const MYTHIC_JOBS = MYTHIC_CHARACTERS.map(m => m.role); // getAllyAttackBase等の職業判定で使う
+
+// 各キャラの大判イラストを先読みしておく(ロード時に一度だけ)。戦闘描画・クエスト画面・加入演出・
+// キャラ一覧のいずれも同じImageを使い回す(同一ID・同一人物・同一画像)。
+const MYTHIC_PORTRAIT_IMAGES = {};
+MYTHIC_CHARACTERS.forEach(m => {
+    const img = new Image();
+    img.onerror = () => console.warn(`[mythic] 画像の読込に失敗: ${m.image}`);
+    img.src = m.image;
+    MYTHIC_PORTRAIT_IMAGES[m.id] = img;
+});
+
+// ==========================================
+// MYTHICクエスト状態の永続化: locked/unlocked/cleared と rewardClaimed をID別に保存する。
+// 循環ポイント自体は既存のIHQ_POINTS_KEY(zsaga_circulation_points_v1)をそのまま正として読み、
+// ここでは絶対に別の循環ポイントを作らない。既存localStorageは一切触らない。
+// ==========================================
+const MYTHIC_QUEST_KEY = 'zsaga_mythic_quests_v1';
+let MythicQuestState = {};
+function saveMythicQuestState() {
+    try { localStorage.setItem(MYTHIC_QUEST_KEY, JSON.stringify(MythicQuestState)); } catch (e) { /* 保存できない環境では無視 */ }
+}
+function loadMythicQuestState() {
+    try {
+        const raw = localStorage.getItem(MYTHIC_QUEST_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        MythicQuestState = (parsed && typeof parsed === 'object') ? parsed : {};
+    } catch (e) { MythicQuestState = {}; }
+    MYTHIC_CHARACTERS.forEach(m => {
+        if (!MythicQuestState[m.questId] || typeof MythicQuestState[m.questId] !== 'object') {
+            MythicQuestState[m.questId] = { status: 'locked', rewardClaimed: false };
+        }
+    });
+}
+loadMythicQuestState();
+// ロード時点、および循環ランク画面・神話継承クエスト画面を開くたびに呼ぶ。
+// 既に必要ポイントへ達しているのに未解放のクエストがあれば、ここでunlockedへ進める(仕様通り)。
+function refreshMythicQuestUnlocks() {
+    let changed = false;
+    MYTHIC_CHARACTERS.forEach(m => {
+        const st = MythicQuestState[m.questId];
+        if (st.status === 'locked' && (InheritanceState.circulationPoints || 0) >= m.unlockPoints) {
+            st.status = 'unlocked';
+            changed = true;
+        }
+    });
+    if (changed) saveMythicQuestState();
+}
+
 // ==========================================
 // 武装奥義(勇者以外・全キャラ共通)
 // キャラごとに固有の名前・属性・専用VFX画像(assets/effects/ultimates/<rank>/<id>.png)を持つ。
@@ -1377,15 +1461,23 @@ CHARACTER_ROSTER.forEach(c => {
 // 武装奥義(allyUltGauge)と衣装奥義(allyCostumeGauge)は別ゲージなので、同じキャラでも両方を独立して溜められる。
 let allyUltGauge = {};
 let allyCostumeGauge = {};
+let allyMythicGauge = {}; // MYTHIC3人専用の必殺技ゲージ(他の2つとは別枠)
 const ALLY_ULT_GAUGE_PER_TURN = 34; // 約3ターンで満タン(100)になり、そのキャラだけ再使用できる
 const ALLY_COSTUME_GAUGE_PER_TURN = 34;
-function resetAllyUltimateGauges() { allyUltGauge = {}; allyCostumeGauge = {}; }
+const ALLY_MYTHIC_GAUGE_PER_TURN = 28; // 効果が強力な分、他の奥義よりやや溜まりにくい
+function resetAllyUltimateGauges() {
+    allyUltGauge = {}; allyCostumeGauge = {}; allyMythicGauge = {};
+    mythicPartyBuffs = { damageReductionCharges: 0, undyingCharges: 0 }; // MYTHICボス戦の一時バフも戦闘開始のたびに必ずリセットする
+}
 function chargeAllyUltimateGauges() {
     Object.keys(ULTIMATE_SKILLS).forEach(id => {
         allyUltGauge[id] = Math.min(100, (allyUltGauge[id] || 0) + ALLY_ULT_GAUGE_PER_TURN);
     });
     Object.keys(COSTUME_ULTIMATE_SKILLS).forEach(id => {
         allyCostumeGauge[id] = Math.min(100, (allyCostumeGauge[id] || 0) + ALLY_COSTUME_GAUGE_PER_TURN);
+    });
+    MYTHIC_CHARACTERS.forEach(m => {
+        allyMythicGauge[m.id] = Math.min(100, (allyMythicGauge[m.id] || 0) + ALLY_MYTHIC_GAUGE_PER_TURN);
     });
 }
 
@@ -1454,6 +1546,7 @@ function useAllyUltimate(ally) {
         screenShakeTimer = Math.max(screenShakeTimer, 14);
         const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
         updateHPUI();
+        const mythicRevived = handleMythicPostHit(isPiercing);
         if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 6, flashFrames: 18, knockbackPower: 12, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
         if (blocked) {
             showDamage(600, 360, 0);
@@ -1462,6 +1555,7 @@ function useAllyUltimate(ally) {
             showDamage(600, 360, dmg);
             bMsg.textContent = `💥${ally.name}の武装奥義「${spec.skill}」！ ${dmg}のダメージ！`;
         }
+        if (mythicRevived) return;
     }, () => {
         // durationMs終了: 演出状態を戻し、通常の後処理(勝利判定 or 敵の反撃)へ合流する
         allyUltimateActive = null;
@@ -1505,6 +1599,7 @@ function useAllyCostumeUltimate(ally) {
         screenShakeTimer = Math.max(screenShakeTimer, 14);
         const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
         updateHPUI();
+        const mythicRevived = handleMythicPostHit(isPiercing);
         if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 6, flashFrames: 18, knockbackPower: 12, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
         if (blocked) {
             showDamage(600, 360, 0);
@@ -1513,6 +1608,7 @@ function useAllyCostumeUltimate(ally) {
             showDamage(600, 360, dmg);
             bMsg.textContent = `✨${ally.name}の衣装奥義「${spec.skill}」！ ${dmg}のダメージ！`;
         }
+        if (mythicRevived) return;
     }, () => {
         // durationMs終了: 演出状態を戻し、通常の後処理(勝利判定 or 敵の反撃)へ合流する
         allyUltimateActive = null;
@@ -1947,7 +2043,8 @@ function findExistingPartyMember(candidate) {
 }
 
 // 仲間の最大HP: 役職ごとに基準値を変え、Lv(重複強化・仕立工房と共通)に応じて伸びる
-const ALLY_BASE_MAX_HP = { '染色術師': 70, '採寸弓師': 90, '裁断戦士': 120 };
+// MYTHIC3人(role: 王裁騎士/星織女皇/黒冠継承者)はボスを撃破して加入する最上位キャラのため、既存最高値の裁断戦士(120)より高めに設定する。
+const ALLY_BASE_MAX_HP = { '染色術師': 70, '採寸弓師': 90, '裁断戦士': 120, '王裁騎士': 170, '星織女皇': 160, '黒冠継承者': 165 };
 function getAllyMaxHp(ally) {
     if (ally.job === '魔物') return getMonsterAllyBaseHp(ally) + ((ally.level || 1) - 1) * 8;
     const base = ALLY_BASE_MAX_HP[ally.job] || 80;
@@ -1998,6 +2095,12 @@ function getAllyAttackBase(ally, context) {
         if (context === 'coop') return Math.round(monsterBase * 0.8);
         if (context === 'perfectfit') return Math.round(monsterBase * 1.2);
         return monsterBase; // 'select'
+    }
+    // MYTHIC3人はボス撃破後に加入する最上位キャラのため、既存最高値(染色術師)より高めの専用基礎値を使う
+    if (MYTHIC_JOBS.includes(ally.job)) {
+        if (context === 'coop') return 110;
+        if (context === 'perfectfit') return 165;
+        return 135; // 'select'
     }
     if (context === 'coop') return ally.job === '染色術師' ? 80 : (ally.job === '採寸弓師' ? 50 : 20);
     if (context === 'perfectfit') return ally.job === '染色術師' ? 120 : (ally.job === '採寸弓師' ? 80 : 40);
@@ -2488,6 +2591,7 @@ function drawFollowerSprite(follower, x, y, scale, isBattleContext) {
 }
 
 const particles = []; const dmgTexts = []; let screenShakeTimer = 0; let battleViewState = 'idle'; let slashEffectTimer = 0;
+let mythicBossHitFlash = 0; // MYTHICボス被弾時の簡易フラッシュ(専用スプライトシートを持たないため、既存sprite.triggerHitの代わりに使う)
 
 function spawnParticles(targetX, targetY) {
     for (let i = 0; i < 30; i++) particles.push({ x: player.x, y: player.y - 20, tx: targetX, ty: targetY, vx: (Math.random() - 0.5) * 15, vy: (Math.random() - 0.5) * 15 - 5, life: 60, color: ['#00e5ff', '#f1c40f', '#ffffff'][i % 3] });
@@ -2890,6 +2994,7 @@ function updateGame() {
 
 function updateBattleEffects() {
     if (screenShakeTimer > 0) screenShakeTimer--; if (slashEffectTimer > 0) slashEffectTimer--;
+    if (mythicBossHitFlash > 0) mythicBossHitFlash--;
     if (lunaImpactEffectTimer > 0) lunaImpactEffectTimer--;
     if (zonImpactEffectTimer > 0) zonImpactEffectTimer--;
     if (skillChargeTimer > 0) skillChargeTimer--;
@@ -3113,7 +3218,16 @@ function drawGame() {
         ctx.globalAlpha = currentEnemy.hp <= 0 ? .3 : 1;
         // クローゼットロード/スピン・レヴィアタンだけ、既存のdragon代用画像を専用アトラスへ差し替える
         const fieldBossRow = FIELD_BOSS_ROW[currentEnemy.bossKey];
-        if (fieldBossRow !== undefined && fieldBossActionsImg.complete && fieldBossActionsImg.naturalWidth > 0) {
+        const mythicImg = currentEnemy.isMythicBoss ? MYTHIC_PORTRAIT_IMAGES[currentEnemy.mythicId] : null;
+        if (mythicImg && mythicImg.complete && mythicImg.naturalWidth > 0) {
+            // MYTHIC3人は専用スプライトシートを持たないため、透過イラストをそのまま(object-fit:containと同等の比率維持で)描画する
+            const dh = 210; const dw = dh * (mythicImg.naturalWidth / mythicImg.naturalHeight);
+            ctx.imageSmoothingEnabled = false;
+            ctx.save();
+            if (mythicBossHitFlash > 0) ctx.filter = 'brightness(2.4) saturate(0)';
+            ctx.drawImage(mythicImg, ex - dw / 2, ey - dh, dw, dh);
+            ctx.restore();
+        } else if (fieldBossRow !== undefined && fieldBossActionsImg.complete && fieldBossActionsImg.naturalWidth > 0) {
             const cellW = fieldBossActionsImg.naturalWidth / FIELD_BOSS_ATLAS_COLS;
             const cellH = fieldBossActionsImg.naturalHeight / FIELD_BOSS_ATLAS_ROWS;
             const col = fieldBossFrameIndex >= 0 ? fieldBossFrameIndex : 0;
@@ -3839,6 +3953,7 @@ function startGame() {
     loadPartyData(); // 保存済みの仲間(characterId・portraitPath・Lv等)があれば復元する
     loadActivePartyIds(); // 保存済みの冒険メンバー(最大4人)を復元する。無ければ所持キャラの先頭4人を初期値にする
     updateRankUI(); // 保存済みのプレイヤーランクポイントをHUDに反映する
+    refreshMythicQuestUnlocks(); // 既に必要な循環ポイントへ達しているMYTHICクエストがあれば、ここで解放状態にする
     GameState.avatar.sprite = new SpriteAnimator('hero', GameState.avatar.job);
     currentTrend = ALL_STYLES[Math.floor(Math.random() * ALL_STYLES.length)]; // Init trend
     FieldAmbientAnimation.start('azurlight');
@@ -4104,30 +4219,55 @@ function pickCounterTarget() {
 }
 
 // 抽選済みの対象(勇者 or 仲間)へ、既に算出済みのdmgを1回だけ適用する共通処理
+const MYTHIC_SPECIAL_NAMES = { mythic_alcyon: '王裁の一閃', mythic_celestia: '星海の反撃', mythic_noctis: '黒環の反縫' };
+function mythicSpecialName(enemy) {
+    return (enemy && enemy.isMythicBoss && MYTHIC_SPECIAL_NAMES[enemy.mythicId]) || ENEMY_SPECIAL_NAMES[enemy ? enemy.tier : 'boss'];
+}
+// MYTHICボス戦専用の一時バフを消費する。damageReductionCharges/undyingChargesは非MYTHIC戦では常に0のため、
+// 既存の反撃ダメージ処理には一切影響しない。
+function applyMythicBuffsToDamage(dmg) {
+    if (mythicPartyBuffs.damageReductionCharges > 0) {
+        mythicPartyBuffs.damageReductionCharges--;
+        dmg = Math.round(dmg * 0.5);
+        bMsg.innerHTML += `<br>🛡️ 加護の力でダメージを軽減した！`;
+    }
+    return dmg;
+}
+function applyMythicUndying(newHp) {
+    if (newHp <= 0 && mythicPartyBuffs.undyingCharges > 0) {
+        mythicPartyBuffs.undyingCharges--;
+        bMsg.innerHTML += `<br>✨ 不滅の加護でHP1だけ持ちこたえた！`;
+        return 1;
+    }
+    return newHp;
+}
+
 function applyCounterDamage(target, dmg, isSpecial) {
     if (target && target.type === 'ally') {
         const ally = target.ally;
         dmg = Math.round(dmg * getElementMultiplier(currentEnemy.style, ally.style)); // 属性の三すくみ補正(敵→仲間)
+        dmg = applyMythicBuffsToDamage(dmg);
         const before = typeof ally.hp === 'number' ? ally.hp : (ally.maxHp || getAllyMaxHp(ally));
-        ally.hp = Math.max(0, before - dmg);
+        ally.hp = applyMythicUndying(Math.max(0, before - dmg));
         if (ally.sprite) ally.sprite.triggerHit({ hitStopFrames: isSpecial ? 10 : 5, flashFrames: isSpecial ? 24 : 12, knockbackPower: isSpecial ? 10 : 5, fromX: 1, fromY: 0, toX: 0, toY: 0.15 });
         screenShakeTimer = Math.max(screenShakeTimer, isSpecial ? 24 : 12);
         playSound(isSpecial ? 'magic' : 'hit');
         showDamage(100, 330, dmg);
         const koText = ally.hp <= 0 ? `<br>⚠️ ${ally.name}は戦闘不能になった！` : '';
         bMsg.innerHTML += (isSpecial
-            ? `<br>⚔️【${currentEnemy.name}の専用技「${ENEMY_SPECIAL_NAMES[currentEnemy.tier]}」】反撃！ ${ally.name}は${dmg}ダメージを受けた！`
+            ? `<br>⚔️【${currentEnemy.name}の専用技「${mythicSpecialName(currentEnemy)}」】反撃！ ${ally.name}は${dmg}ダメージを受けた！`
             : `<br>${currentEnemy.name}の反撃！ ${ally.name}は${dmg}ダメージを受けた！`) + koText;
     } else {
         dmg = Math.round(dmg * getElementMultiplier(currentEnemy.style, GameState.avatar.style)); // 属性の三すくみ補正(敵→勇者)
-        GameState.avatar.hp = Math.max(0, GameState.avatar.hp - dmg); // 0まで減る(ゲームオーバー判定に使う)
+        dmg = applyMythicBuffsToDamage(dmg);
+        GameState.avatar.hp = applyMythicUndying(Math.max(0, GameState.avatar.hp - dmg)); // 0まで減る(ゲームオーバー判定に使う)
         updateHeroHUD();
         if (GameState.avatar.sprite) GameState.avatar.sprite.triggerHit({ hitStopFrames: isSpecial ? 10 : 5, flashFrames: isSpecial ? 24 : 12, knockbackPower: isSpecial ? 10 : 5, fromX: 1, fromY: 0, toX: 0, toY: 0.15 });
         screenShakeTimer = Math.max(screenShakeTimer, isSpecial ? 24 : 12);
         playSound(isSpecial ? 'magic' : 'hit');
         showDamage(200, 380, dmg);
         bMsg.innerHTML += isSpecial
-            ? `<br>⚔️【${currentEnemy.name}の専用技「${ENEMY_SPECIAL_NAMES[currentEnemy.tier]}」】反撃！ 勇者は${dmg}ダメージを受けた！`
+            ? `<br>⚔️【${currentEnemy.name}の専用技「${mythicSpecialName(currentEnemy)}」】反撃！ 勇者は${dmg}ダメージを受けた！`
             : `<br>${currentEnemy.name}の反撃！ 勇者は${dmg}ダメージを受けた！`;
     }
 }
@@ -4135,16 +4275,19 @@ function applyCounterDamage(target, dmg, isSpecial) {
 function enemyCounterAttack(onDone) {
     chargeAllyUltimateGauges(); // 1ターン経過ごとに全員の武装奥義ゲージを進める(戦闘中のみの一時状態)
     if (!currentEnemy || currentEnemy.hp <= 0) { if (onDone) onDone(); return; }
-    const counterChance = currentEnemy.tier === 'boss' ? 0.45 : (currentEnemy.tier === 'mid' ? 0.30 : 0.15);
+    // MYTHICボスは既存のS(boss)ランクより反撃頻度を上げる(通しで倒しやすくなり過ぎないため)。数式自体は既存と同じ枠組みを使う。
+    const counterChance = currentEnemy.isMythicBoss ? 0.55 : (currentEnemy.tier === 'boss' ? 0.45 : (currentEnemy.tier === 'mid' ? 0.30 : 0.15));
     if (Math.random() > counterChance) { if (onDone) onDone(); return; }
 
     // 中型/ボスは専用技として通常反撃より強いダメージを出すことがある
-    const isSpecial = (currentEnemy.tier === 'mid' || currentEnemy.tier === 'boss') && Math.random() < 0.4;
+    const isSpecial = (currentEnemy.tier === 'mid' || currentEnemy.tier === 'boss') && Math.random() < (currentEnemy.isMythicBoss ? 0.5 : 0.4);
     const tierMulti = currentEnemy.tier === 'boss' ? 2.0 : (currentEnemy.tier === 'mid' ? 1.4 : 1.0);
     // フィールド拡張: ステージごとの敵攻撃倍率(設定がなければ×1のまま)
     const fieldCfg = window.ZSAGA_FIELD_EXPANSION && window.ZSAGA_FIELD_EXPANSION.fields[GameState.currentFieldId];
     const fieldAtkMult = fieldCfg ? fieldCfg.enemyAttackMultiplier : 1;
-    const dmg = Math.max(1, Math.round(randInt(15, 30) * tierMulti * fieldAtkMult * (isSpecial ? 1.6 : 1)));
+    // MYTHICボスだけ、JSON由来のatkMulti(現在の最強ボス基準)を追加で掛ける
+    const mythicAtkMult = currentEnemy.isMythicBoss ? (currentEnemy.atkMulti || 1) : 1;
+    const dmg = Math.max(1, Math.round(randInt(15, 30) * tierMulti * fieldAtkMult * mythicAtkMult * (isSpecial ? 1.6 : 1)));
     const target = pickCounterTarget();
 
     // 反撃後、勇者のHPが0、または仲間が全滅していたらゲームオーバーへ切り替える(通常のonDoneは呼ばない)
@@ -4153,6 +4296,12 @@ function enemyCounterAttack(onDone) {
         if (isPartyWiped()) { triggerGameOver('party'); return; }
         if (onDone) onDone();
     };
+
+    // MYTHICボス専用の予告演出(色バリア・自己回復などの固有ギミックはplayMythicBossAttackSequence内で処理する)
+    if (currentEnemy.isMythicBoss) {
+        playMythicBossAttackSequence(dmg, isSpecial, finish, target);
+        return;
+    }
 
     // クローゼットロード/スピン・レヴィアタン専用の攻撃演出(確率・ダメージ計算式はすべて上と同じものを使う)
     if (currentEnemy.bossKey === 'wardrobe_lord' || currentEnemy.bossKey === 'spin_leviathan') {
@@ -4270,6 +4419,277 @@ function startFieldBossEncounter(fieldId) {
     }, 1200);
 }
 
+// ==========================================
+// MYTHIC(神話継承)ボス戦
+// 既存のcurrentEnemy/executeAttack/enemyCounterAttack/applyDamageToEnemy/triggerCirculationの
+// 仕組みをそのまま使い、別の戦闘エンジンは作らない。ボスごとの固有ギミックだけをここに追加する。
+// ==========================================
+
+// 現在の最強フィールドボス(HPが最大のもの)をJSONの倍率の基準にする。個別の固定値は使わない。
+function getCurrentTopBoss() {
+    const fx = window.ZSAGA_FIELD_EXPANSION;
+    const fallback = { hp: 2400, attack: 76, gold: 1200 };
+    if (!fx || !fx.fields) return fallback;
+    let top = null;
+    Object.values(fx.fields).forEach(f => { if (f.boss && (!top || f.boss.hp > top.hp)) top = f.boss; });
+    return top || fallback;
+}
+
+// ボスとして戦う本人と、勝利後に仲間になる本人は同一ID・同一画像(MYTHIC_PORTRAIT_IMAGES)を使う。
+function buildMythicBossEnemy(mythicId) {
+    const def = MYTHIC_CHARACTERS.find(m => m.id === mythicId);
+    if (!def) return null;
+    const top = getCurrentTopBoss();
+    const hp = Math.max(1, Math.round(top.hp * def.boss.hpMulti));
+    const cfg = ENEMY_TIER_CONFIG.boss; // 既存ボスの耐性・障壁閾値をベースにする(数式自体は増やさない)
+    const enemy = {
+        name: def.name, enemyTypeKey: def.id, tier: 'boss', rankLabel: 'MYTHIC',
+        isDragon: false, job: '魔物', style: def.attribute,
+        moveSpeed: 1.0, attackRange: 90,
+        originItem: GameState.avatar.name || '伝説の遺物',
+        hp, maxHp: hp, goldDrop: Math.round((top.gold || 1200) * def.boss.hpMulti),
+        atkMulti: def.boss.atkMulti, // enemyCounterAttackのMYTHIC専用ダメージ計算だけで使う(既存の反撃式には影響しない)
+        normalResist: cfg.normalResist, barrierThresholdPct: cfg.barrierThresholdPct,
+        barrierActive: false, barrierBroken: false,
+        isMythicBoss: true, mythicId: def.id, phase: 1, maxPhases: def.boss.phases, mechanic: {},
+        sprite: new SpriteAnimator('enemy', 'dragon') // 描画ガード用のダミー(実描画は専用のMYTHIC分岐で行う)
+    };
+    initMythicMechanicState(enemy, def);
+    return enemy;
+}
+
+// ボスごとの固有ギミックの初期状態。既存のbarrierThresholdPct/barrierBroken/barrierActiveを
+// そのまま流用し、新しい数式は増やさない。
+function initMythicMechanicState(enemy, def) {
+    if (enemy.mythicId === 'mythic_celestia') {
+        // 星布の色バリア: 対応する属性(またはスキル等の貫通攻撃)でしか解除できない。
+        // barrierThresholdPct=1.0にすることで「barrierBrokenになるまでは通常攻撃が常に0」という
+        // 既存のapplyDamageToEnemyの分岐をそのまま使い、専用の数式を新設しない。
+        enemy.barrierThresholdPct = 1.0; enemy.barrierBroken = false; enemy.barrierActive = true;
+        enemy.mechanic = { colorOrder: ['氷', '光', '闇'], colorIndex: 0 };
+    } else if (enemy.mythicId === 'mythic_noctis') {
+        enemy.mechanic = { revived: false, coreDestroyed: false };
+    } else {
+        enemy.mechanic = {}; // アルシオンは既存のバリア(cfg.barrierThresholdPct)をそのまま使うため追加状態は不要
+    }
+}
+
+function startMythicBossEncounter(mythicId) {
+    // この関数は神話継承クエスト画面(ステータスメニューの奥にネストされた画面)のボタンから呼ばれるため、
+    // isMenuOpenは常にtrueのままここへ来る(closeMythicQuestScreen()のような「1つ前の画面へ戻る」動作ではなく、
+    // メニュー階層をまとめて閉じてから戦闘へ入る)。
+    if (isShopOpen || isFashionShow || isBattling) return;
+    const def = MYTHIC_CHARACTERS.find(m => m.id === mythicId);
+    if (!def) return;
+    document.getElementById('mythic-quest-screen').classList.add('hidden');
+    isMythicQuestScreenOpen = false;
+    document.getElementById('status-menu').classList.add('hidden');
+    isMenuOpen = false;
+    isBattling = true; keys['ArrowUp'] = keys['ArrowDown'] = keys['ArrowLeft'] = keys['ArrowRight'] = false;
+    BGMManager.stop(); playSound('noise'); document.getElementById('game-screen').classList.add('screen-shake'); document.getElementById('encounter-effect').classList.remove('hidden');
+    attackLungeT = 0; attackLungeDir = 0; skillChargeTimer = 0; resetAllyUltimateGauges();
+    setTimeout(() => {
+        document.getElementById('game-screen').classList.remove('screen-shake'); document.getElementById('encounter-effect').classList.add('hidden');
+        currentEnemy = buildMythicBossEnemy(mythicId); battleViewState = 'idle'; updateHPUI(); updateHeroHUD();
+        if (GameState.avatar.sprite) { GameState.avatar.sprite.dir = DIR.RIGHT; GameState.avatar.sprite.setAction('idle'); }
+        GameState.party.forEach(p => { if (p.sprite) { p.sprite.dir = DIR.RIGHT; p.sprite.setAction('idle'); } });
+        bName.textContent = `⚠️【神話継承クエスト】${def.questTitle}`;
+        bMsg.textContent = `${def.name}が立ちはだかる…！ ${def.boss.mechanicText}`;
+        bActions.classList.remove('hidden'); document.getElementById('ally-select-panel').classList.add('hidden'); battleDlg.classList.remove('hidden');
+        startBattleBGM();
+    }, 1200);
+}
+
+// 攻撃直前に呼ぶ: 通常はisPiercingをそのまま返す。セレスティアだけ、現在必要な属性と一致する
+// 攻撃(通常攻撃・追撃含む)を一時的に貫通扱いにし、色の合った属性攻撃で結界を解けるようにする。
+function mythicEffectivePiercing(baseIsPiercing, attackerStyle) {
+    if (baseIsPiercing) return true;
+    if (!currentEnemy || !currentEnemy.isMythicBoss || currentEnemy.mythicId !== 'mythic_celestia') return baseIsPiercing;
+    if (currentEnemy.barrierBroken) return baseIsPiercing; // 既に解除済みのフェーズでは通常通り
+    const need = currentEnemy.mechanic && currentEnemy.mechanic.colorOrder[currentEnemy.mechanic.colorIndex];
+    return !!need && attackerStyle === need;
+}
+
+// ダメージ適用の直後・hp<=0の勝利判定より前に必ず呼ぶ。
+// ノクティスの復活/核破壊、および全MYTHICボス共通のフェーズ進行を処理する。
+// 戻り値true = このヒットでは(復活したので)勝利判定をまだ行わない、という合図。
+function handleMythicPostHit(usedPiercing) {
+    if (!currentEnemy || !currentEnemy.isMythicBoss) return false;
+    mythicBossHitFlash = 8;
+    if (currentEnemy.mythicId === 'mythic_noctis' && usedPiercing) currentEnemy.mechanic.coreDestroyed = true;
+    if (currentEnemy.hp <= 0 && currentEnemy.mythicId === 'mythic_noctis' && !currentEnemy.mechanic.revived && !currentEnemy.mechanic.coreDestroyed) {
+        currentEnemy.mechanic.revived = true;
+        currentEnemy.hp = Math.max(1, Math.round(currentEnemy.maxHp * 0.35));
+        currentEnemy.phase = currentEnemy.maxPhases;
+        updateHPUI();
+        screenShakeTimer = Math.max(screenShakeTimer, 24);
+        playSound('magic');
+        bMsg.innerHTML += `<br>🖤 破れた外套が再縫製され、【${currentEnemy.name}】が復活した！`;
+        return true;
+    }
+    advanceMythicPhaseIfNeeded();
+    return false;
+}
+
+// フェーズ境界はmaxPhases等分(2フェーズ→50%、3フェーズ→66%/33%)。境界を跨いだ時だけ1回進める。
+function advanceMythicPhaseIfNeeded() {
+    if (!currentEnemy || !currentEnemy.isMythicBoss || currentEnemy.hp <= 0) return;
+    const pct = currentEnemy.hp / currentEnemy.maxHp;
+    const max = currentEnemy.maxPhases;
+    // 例: 3フェーズなら phase3は残33%以下、phase2は残66%以下(かつphase3の範囲を除く)。
+    // pが小さいフェーズほど境界(残りHP%)は高くなるため、(max-p+1)/maxで計算する。
+    let targetPhase = 1;
+    for (let p = max; p >= 2; p--) { if (pct <= (max - p + 1) / max) { targetPhase = p; break; } }
+    if (targetPhase <= currentEnemy.phase) return;
+    currentEnemy.phase = targetPhase;
+    if (currentEnemy.mythicId === 'mythic_alcyon') {
+        currentEnemy.barrierBroken = false; currentEnemy.barrierActive = false; // 金糸が再び光り、障壁が再展開する
+        bMsg.innerHTML += `<br>✨【${currentEnemy.name}】の金糸が再び光り輝く！ 必殺技で断ち直せ！`;
+    } else if (currentEnemy.mythicId === 'mythic_celestia') {
+        currentEnemy.mechanic.colorIndex = Math.min(currentEnemy.mechanic.colorOrder.length - 1, currentEnemy.mechanic.colorIndex + 1);
+        currentEnemy.barrierBroken = false; currentEnemy.barrierActive = true;
+        const need = currentEnemy.mechanic.colorOrder[currentEnemy.mechanic.colorIndex];
+        bMsg.innerHTML += `<br>💫 星布の色が変わった！ 次は${need}属性の攻撃(または必殺技)で結界を解け！`;
+    } else if (currentEnemy.mythicId === 'mythic_noctis') {
+        bMsg.innerHTML += `<br>🌑【${currentEnemy.name}】の気配が変わった…次の一撃に備えろ！`;
+    }
+}
+
+// MYTHICボスの被ダメージ軽減/戦闘不能耐えを消費する(勇者専用ultimateスキルの被弾処理と同じ場所=
+// applyCounterDamageの直前に呼ぶ)。既存の非MYTHIC戦闘ではdamageReductionCharges/undyingChargesが
+// 常に0のため一切影響しない。
+let mythicPartyBuffs = { damageReductionCharges: 0, undyingCharges: 0 };
+
+function healPartyAll(amount) {
+    if (amount <= 0) return;
+    GameState.avatar.hp = Math.min(GameState.avatar.maxHp || 100, GameState.avatar.hp + amount);
+    updateHeroHUD();
+    showHeal(200, 380, amount);
+    getActiveParty().forEach(a => {
+        if (typeof a.hp === 'number' && typeof a.maxHp === 'number' && a.hp > 0) {
+            a.hp = Math.min(a.maxHp, a.hp + amount);
+        }
+    });
+}
+
+// ボス反撃の予告演出(既存のfieldBossWarningTimer/Colorをそのまま再利用)。
+// セレスティアは結界が生きている間だけ、自己回復+強めの反撃を行う。
+const MYTHIC_WARNING_COLOR = { mythic_alcyon: '#ffd45a', mythic_celestia: '#7ce0ff', mythic_noctis: '#ff3d5a' };
+function playMythicBossAttackSequence(dmg, isSpecial, onDone, target) {
+    if (fieldBossAttackActive || !currentEnemy) { if (onDone) onDone(); return; }
+    fieldBossAttackActive = true;
+    fieldBossWarningColor = MYTHIC_WARNING_COLOR[currentEnemy.mythicId] || '#ff3d5a';
+    fieldBossWarningTimer = 30;
+
+    const WARNING_MS = 550, FRAME_MS = 180, FRAMES = 5;
+    setTimeout(() => {
+        fieldBossWarningTimer = 0;
+        for (let i = 0; i < FRAMES; i++) {
+            setTimeout(() => {
+                if (!fieldBossAttackActive || !currentEnemy) return;
+                fieldBossFrameIndex = i;
+                if (i === 3) {
+                    // セレスティアは結界が生きている間、反撃と同時に自己回復する(倒すには結界を解く必要がある、という誘導)
+                    if (currentEnemy.mythicId === 'mythic_celestia' && !currentEnemy.barrierBroken) {
+                        const healAmt = Math.round(currentEnemy.maxHp * 0.05);
+                        currentEnemy.hp = Math.min(currentEnemy.maxHp, currentEnemy.hp + healAmt);
+                        updateHPUI();
+                        spawnMagicParticles(600, 380, 600, 380, '#7ce0ff');
+                        bMsg.innerHTML += `<br>💠【${currentEnemy.name}】が結界の中で自らを癒やした！(+${healAmt})`;
+                    }
+                    applyCounterDamage(target, dmg, isSpecial);
+                    screenShakeTimer = Math.max(screenShakeTimer, 18);
+                    spawnMagicParticles(600, 380, 600, 380, MYTHIC_WARNING_COLOR[currentEnemy.mythicId] || '#ff3d5a');
+                }
+            }, FRAME_MS * i);
+        }
+        setTimeout(() => {
+            fieldBossAttackActive = false;
+            fieldBossFrameIndex = -1;
+            if (onDone) onDone();
+        }, FRAME_MS * FRAMES + 80);
+    }, WARNING_MS);
+}
+
+// ==========================================
+// MYTHIC必殺技: 3人それぞれ専用の名前・演出色を持つが、発動方法・MP不要・ゲージ制・ボタン構造は
+// 武装奥義/衣装奥義と完全に同じ「仲間を選ぶ」パネルへ統合する(別の操作系は作らない)。
+// 単体ボスしか存在しないため「敵全体」は現状の単体ダメージ+固有の味方サポート効果として実装する。
+// ==========================================
+const MYTHIC_ULTIMATE_SKILLS = {
+    mythic_alcyon: { name: '天縫奥義・星界裁断', color: '#ffd45a', durationMs: 1500, impactAtMs: 780 },
+    mythic_celestia: { name: '星織奥義・天衣創世', color: '#7ce0ff', durationMs: 1560, impactAtMs: 800 },
+    mythic_noctis: { name: '黒環奥義・不滅再縫', color: '#ff3d5a', durationMs: 1620, impactAtMs: 840 }
+};
+const MYTHIC_ULTIMATE_RANK_MULTI = 2.1; // 既存ランク別倍率(最大SSSの1.85)より高く、最上位キャラとして扱う
+
+function useMythicUltimate(ally) {
+    if (battleViewState !== 'idle' || !currentEnemy || allyUltimateActive) return;
+    if (typeof ally.hp === 'number' && ally.hp <= 0) return;
+    const id = ally.characterId;
+    const skill = id && MYTHIC_ULTIMATE_SKILLS[id];
+    const def = id && MYTHIC_CHARACTERS.find(m => m.id === id);
+    if (!skill || !def) return;
+    if ((allyMythicGauge[id] || 0) < 100) return;
+
+    allyMythicGauge[id] = 0;
+    allySelectPanel.classList.add('hidden');
+    battleViewState = 'attacking';
+    playSound('magic');
+
+    const base = getAllyAttackBase(ally, 'select');
+    const rawDmg = Math.round(base * getAllyDamageMultiplier(ally) * getElementMultiplier(ally.style, currentEnemy.style) * MYTHIC_ULTIMATE_RANK_MULTI);
+    const spec = { rank: 'SSS', skill: skill.name, image: def.image, color: skill.color, durationMs: skill.durationMs, impactAtMs: skill.impactAtMs };
+
+    allyUltimateActive = { ally, characterId: id, spec, startedAt: performance.now() };
+    if (ally.sprite) ally.sprite.setAction('attack');
+
+    showUltimateVFX(spec, () => {
+        if (!currentEnemy) return;
+        screenShakeTimer = Math.max(screenShakeTimer, 16);
+        const effectivePiercing = mythicEffectivePiercing(true, ally.style);
+        const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, effectivePiercing);
+        updateHPUI();
+        const revived = handleMythicPostHit(effectivePiercing);
+        if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 8, flashFrames: 20, knockbackPower: 12, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
+
+        // 各キャラ固有のサポート効果(既存の必殺技システムには影響しない、MYTHIC専用の追加処理)
+        let supportMsg = '';
+        if (id === 'mythic_alcyon') {
+            mythicPartyBuffs.damageReductionCharges += 1;
+            supportMsg = '🛡️ 味方全体に一度だけ被ダメージ軽減が付与された！';
+        } else if (id === 'mythic_celestia') {
+            const healAmt = Math.max(1, Math.round((GameState.avatar.maxHp || 100) * 0.3));
+            healPartyAll(healAmt);
+            supportMsg = `✨ 味方全体のHPが${healAmt}回復した！`;
+        } else if (id === 'mythic_noctis') {
+            const lifesteal = Math.max(1, Math.round(dmg * 0.25));
+            healPartyAll(lifesteal);
+            mythicPartyBuffs.undyingCharges += 1;
+            supportMsg = `🖤 与えたダメージの一部(${lifesteal})が味方全体のHPに還元された！ 一度だけ戦闘不能を耐える加護も付与！`;
+        }
+
+        if (blocked) {
+            showDamage(600, 360, 0);
+            bMsg.innerHTML = `🛡️ ${ally.name}の必殺技は結界に阻まれた！`;
+        } else {
+            showDamage(600, 360, dmg);
+            bMsg.innerHTML = `💥${ally.name}の必殺技「${skill.name}」！ ${dmg}のダメージ！<br>${supportMsg}`;
+        }
+        if (revived) return; // 復活直後は勝利判定へ進めない(handleMythicPostHitがhpを立て直し済み)
+    }, () => {
+        allyUltimateActive = null;
+        if (ally.sprite) ally.sprite.setAction('idle');
+        if (currentEnemy && currentEnemy.hp <= 0) { setTimeout(() => triggerCirculation(), 800); return; }
+        setTimeout(() => {
+            enemyCounterAttack(() => {
+                battleViewState = 'idle';
+                bActions.classList.remove('hidden');
+            });
+        }, 500);
+    });
+}
+
 function executeAttack(damageMulti = 1, attackTypeStr = '攻撃', isPiercing = false) {
     if (battleViewState !== 'idle' || !currentEnemy) return;
     // 交代中の仲間が反撃で戦闘不能になっていたら、自動的に勇者へ戻す(戦闘不能のまま行動させない)
@@ -4296,8 +4716,11 @@ function executeAttack(damageMulti = 1, attackTypeStr = '攻撃', isPiercing = f
     const elemMulti = getElementMultiplier(attacker.style, currentEnemy.style); // 属性の三すくみ補正
     rawDmg = Math.round(rawDmg * elemMulti);
     // 主人公スキル「衣装奥義・シームブレイク」(isPiercing)のみ、A/Sランクの障壁を貫通できる
-    const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, isPiercing);
+    // MYTHIC(セレスティア)戦では、結界の色と一致する属性の攻撃も一時的に貫通扱いになる
+    const effectivePiercing = mythicEffectivePiercing(isPiercing, attacker.style);
+    const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, effectivePiercing);
     updateHPUI();
+    const mythicRevived = handleMythicPostHit(effectivePiercing);
     if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 6, flashFrames: 16, knockbackPower: 8, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
 
     const elemLabel = elemMulti > 1 ? '(効果は抜群だ！)' : (elemMulti < 1 ? '(効果はいまひとつ…)' : '');
@@ -4309,7 +4732,7 @@ function executeAttack(damageMulti = 1, attackTypeStr = '攻撃', isPiercing = f
         bMsg.textContent = `${attacker.name}の${attackTypeStr}！ ${dmg} のダメージ！${elemLabel}`;
     }
 
-    if (currentEnemy.hp <= 0) {
+    if (currentEnemy.hp <= 0 && !mythicRevived) {
         setTimeout(() => triggerCirculation(), 800);
         return;
     }
@@ -4345,11 +4768,12 @@ function perfectFitPhase(allies) {
         // 属性一致の連携攻撃(Perfect Fit)は貫通攻撃: A/Sランクの障壁も破壊できる
         const { dmg: appliedDmg } = applyDamageToEnemy(currentEnemy, totalRawDmg, true);
         updateHPUI();
+        const mythicRevived = handleMythicPostHit(true);
         if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 8, flashFrames: 20, knockbackPower: 12, fromX: 0, fromY: 0, toX: 1, toY: -0.2 });
 
         setTimeout(() => {
             cutin.classList.remove('animate-cutin'); cutin.classList.add('hidden');
-            if (currentEnemy && currentEnemy.hp <= 0) {
+            if (currentEnemy && currentEnemy.hp <= 0 && !mythicRevived) {
                 triggerCirculation();
             } else {
                 bMsg.textContent = `連携追撃で特大 ${appliedDmg}ダメージ！`;
@@ -4402,14 +4826,16 @@ function coOpPhase() {
         else if (ally.job === '採寸弓師') { playSound('slash'); showDamage(610, 350, 15); showDamage(590, 370, 15); showDamage(620, 380, 20); }
         else { playSound('hit'); }
 
-        // 仲間の通常追撃も貫通不可: A/Sランクの障壁は破れない
-        const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, false);
+        // 仲間の通常追撃も貫通不可: A/Sランクの障壁は破れない(MYTHICセレスティアだけ、色の合った属性なら例外的に貫通する)
+        const effectivePiercing = mythicEffectivePiercing(false, ally.style);
+        const { dmg, blocked } = applyDamageToEnemy(currentEnemy, rawDmg, effectivePiercing);
         if (blocked) anyBlocked = true;
         showDamage(600 + (Math.random() * 40 - 20), 380 + (Math.random() * 40 - 20), dmg);
         totalFollowDmg += dmg; updateHPUI();
+        const mythicRevived = handleMythicPostHit(effectivePiercing);
         if (currentEnemy.sprite) currentEnemy.sprite.triggerHit({ hitStopFrames: 5, flashFrames: 14, knockbackPower: 6, fromX: 0, fromY: 0, toX: 1, toY: -0.15 });
 
-        if (currentEnemy.hp <= 0) {
+        if (currentEnemy.hp <= 0 && !mythicRevived) {
             setTimeout(() => { triggerCirculation(); }, 800);
         } else {
             setTimeout(() => attackAlly(index + 1), 400);
@@ -4483,6 +4909,21 @@ function openAllySelect() {
             costumeBtn.disabled = !cReady;
             if (cReady) costumeBtn.addEventListener('click', () => useAllyCostumeUltimate(ally));
             allySelectPanel.appendChild(costumeBtn);
+        }
+
+        // MYTHIC必殺技(神話継承クエストで加入した本人だけ)。武装奥義・衣装奥義とは別ゲージ(allyMythicGauge)。
+        const mythicSkill = ally.characterId ? MYTHIC_ULTIMATE_SKILLS[ally.characterId] : null;
+        if (mythicSkill) {
+            const mGauge = allyMythicGauge[ally.characterId] || 0;
+            const mReady = mGauge >= 100;
+            const mythicBtn = document.createElement('button');
+            mythicBtn.className = 'retro-btn cmd-btn ult-btn mythic-ult-btn';
+            mythicBtn.textContent = mReady
+                ? `💫 必殺技「${mythicSkill.name}」発動！`
+                : `🔒 必殺技「${mythicSkill.name}」(ゲージ${mGauge}%)`;
+            mythicBtn.disabled = !mReady;
+            if (mReady) mythicBtn.addEventListener('click', () => useMythicUltimate(ally));
+            allySelectPanel.appendChild(mythicBtn);
         }
 
         if (ally !== activeFighter) {
@@ -4703,8 +5144,15 @@ function triggerCirculation() {
     setTimeout(() => {
         battleDlg.classList.add('hidden');
 
-        // 伝説3: Fashion Show for Boss（撃破後は仲間にはならず、凱旋ボーナスGに変換される）
-        if (currentEnemy && currentEnemy.isDragon) {
+        // MYTHIC(神話継承)ボス: 撃破した本人だけ、専用の加入演出を経て所持キャラクター一覧へ加わる。
+        // isDragon(凱旋の儀)やフィールドボスの金変換とは完全に別の専用分岐にし、既存処理へは一切合流させない。
+        if (currentEnemy && currentEnemy.isMythicBoss) {
+            const defeated = currentEnemy;
+            currentEnemy = null; isBattling = false; battleViewState = 'idle'; activeFighter = null;
+            endBattleBGM();
+            handleMythicBossVictory(defeated);
+        } else if (currentEnemy && currentEnemy.isDragon) {
+            // 伝説3: Fashion Show for Boss（撃破後は仲間にはならず、凱旋ボーナスGに変換される）
             startFashionShow(currentEnemy);
             currentEnemy = null; // Fix memory leak and ensure draw mode properly works
         } else if (currentEnemy) {
@@ -4722,6 +5170,114 @@ function triggerCirculation() {
         }
     }, 4000);
 }
+
+// ==========================================
+// MYTHIC(神話継承)撃破 → 加入演出
+// 「本人を倒した時だけ本人が仲間になる」を満たすため、ここでしか
+// MythicQuestState[...].rewardClaimedをtrueにしない。加入処理(addOrEnhancePartyMember)と
+// クリア状態の保存(saveMythicQuestState)を同一関数内・同期的に行い、リロードや二重撃破で
+// 報酬が複数回付与されないようにする。GameState.party/activePartyIdsへの自動編成は一切行わない。
+// ==========================================
+function handleMythicBossVictory(bossEnemy) {
+    const def = MYTHIC_CHARACTERS.find(m => m.id === bossEnemy.mythicId);
+    if (!def) return;
+    if (!MythicQuestState[def.questId]) MythicQuestState[def.questId] = { status: 'unlocked', rewardClaimed: false };
+    const state = MythicQuestState[def.questId];
+
+    if (state.rewardClaimed) {
+        // 既に加入済み(保存データの不整合などによる二重撃破時の保険)。演出だけ見せ、追加の仲間は作らない。
+        showMythicJoinScreen(def, true, resolvePartyMember(def.id));
+        return;
+    }
+
+    const result = addOrEnhancePartyMember({
+        name: def.name, job: def.role, rarity: 'MYTHIC', style: def.attribute, color: def.color,
+        characterId: def.id, portraitPath: def.image, isDragon: false, originItem: '神話継承クエスト',
+        // フィールド歩行用の専用スプライトシートは同梱されていないため、既存の仲間用共通歩行素材で代用する
+        // (一覧・編成・戦闘の本人画像はportraitPath=def.imageを使うため、本人の見た目自体は損なわれない)
+        sprite: new SpriteAnimator('ally', def.role)
+    });
+    state.status = 'cleared';
+    state.rewardClaimed = true;
+    saveMythicQuestState();
+    showMythicJoinScreen(def, result.merged, result.member);
+}
+
+const mythicJoinScreen = document.getElementById('mythic-join-screen');
+function showMythicJoinScreen(def, merged, member) {
+    document.getElementById('mythic-join-portrait').src = def.image;
+    document.getElementById('mythic-join-name').textContent = def.name;
+    document.getElementById('mythic-join-role').textContent = `${def.role} / ${def.attribute}属性 / MYTHIC`;
+    document.getElementById('mythic-join-message').textContent = def.joinMessage;
+    document.getElementById('mythic-join-status').textContent = merged
+        ? `既に所持済みのため、重複強化を適用しました(Lv.${member ? member.level : '?'})`
+        : `所持キャラクター一覧に加わりました！`;
+    mythicJoinScreen.classList.remove('hidden');
+    playSound('fanfare');
+}
+function closeMythicJoinScreen() {
+    playSound('select');
+    mythicJoinScreen.classList.add('hidden');
+}
+document.getElementById('btn-close-mythic-join').addEventListener('click', closeMythicJoinScreen);
+
+// ==========================================
+// 神話継承クエスト画面: 服の継承クエストとは別の専用画面(既存のihq-*タブ・保存には一切触れない)。
+// 循環ポイントは既存のInheritanceState.circulationPointsをそのまま読むだけで、別の値は作らない。
+// ==========================================
+let isMythicQuestScreenOpen = false;
+function openMythicQuestScreen() {
+    if (isBattling || isShopOpen || isFashionShow || isPartyFormationOpen || isInheritanceOpen) return;
+    playSound('select');
+    refreshMythicQuestUnlocks(); // 開くたびに最新の循環ポイントで未解放クエストを再チェックする
+    document.getElementById('status-menu').classList.add('hidden');
+    document.getElementById('mythic-quest-screen').classList.remove('hidden');
+    isMythicQuestScreenOpen = true;
+    renderMythicQuestScreen();
+}
+function closeMythicQuestScreen() {
+    playSound('select');
+    document.getElementById('mythic-quest-screen').classList.add('hidden');
+    isMythicQuestScreenOpen = false;
+    if (isMenuOpen) document.getElementById('status-menu').classList.remove('hidden');
+}
+function renderMythicQuestScreen() {
+    const content = document.getElementById('mythic-quest-content');
+    if (!content) return;
+    const pts = InheritanceState.circulationPoints || 0;
+    content.innerHTML = MYTHIC_CHARACTERS.map(def => {
+        const st = MythicQuestState[def.questId] || { status: 'locked', rewardClaimed: false };
+        let badge, actionHtml;
+        if (st.status === 'cleared') {
+            badge = '<span class="mythic-quest-badge is-cleared">継承済み</span>';
+            actionHtml = '<div class="mythic-quest-hint">仲間になりました。パーティー編成画面で編成できます。</div>';
+        } else if (st.status === 'unlocked') {
+            badge = '<span class="mythic-quest-badge is-unlocked">挑戦可能</span>';
+            actionHtml = `<button class="retro-btn small-btn mythic-quest-challenge-btn" data-id="${def.id}">⚔️ 挑戦する</button>
+              <div class="mythic-quest-hint">敗北しても何度でも再挑戦できます</div>`;
+        } else {
+            badge = '<span class="mythic-quest-badge is-locked">未解放</span>';
+            actionHtml = `<div class="mythic-quest-hint">循環ポイント ${pts}/${def.unlockPoints}</div>`;
+        }
+        return `
+          <div class="mythic-quest-card">
+            <img class="mythic-quest-portrait" src="${def.image}" alt="${def.name}">
+            <div class="mythic-quest-body">
+              <div class="mythic-quest-title">${def.questTitle}</div>
+              <div class="mythic-quest-name" style="color:${def.color};">${def.name}</div>
+              <div class="mythic-quest-role">${def.role} / ${def.attribute}属性</div>
+              ${badge}
+              <div class="mythic-quest-mechanic">⚠️ ${def.boss.mechanicText}</div>
+              ${actionHtml}
+            </div>
+          </div>`;
+    }).join('');
+    content.querySelectorAll('.mythic-quest-challenge-btn').forEach(btn => {
+        btn.addEventListener('click', () => startMythicBossEncounter(btn.dataset.id));
+    });
+}
+document.getElementById('btn-open-mythic-quest').addEventListener('click', openMythicQuestScreen);
+document.getElementById('btn-close-mythic-quest').addEventListener('click', closeMythicQuestScreen);
 
 // 伝説3: Fashion Show Logic
 function startFashionShow(bossEnemy) {
@@ -4946,7 +5502,7 @@ let pfSwapPendingKey = null; // 4人編成済みの状態で新しいキャラ�
 let pfRankFilter = 'ALL';
 let pfStyleFilter = 'ALL';
 let pfSortMode = 'rank';
-const PF_RANK_ORDER = RARITY_TABLE.map(r => r.key); // ['SSS','SS','S','A','B','C'] (既存のガチャ確率テーブルの並びをそのまま使う)
+const PF_RANK_ORDER = ['MYTHIC', ...RARITY_TABLE.map(r => r.key)]; // ['MYTHIC','SSS','SS','S','A','B','C']。MYTHICは通常ガチャ確率テーブルとは別枠なので先頭に手動で足すだけで、RARITY_TABLE自体は変更しない
 
 // characterIdから、表示専用の役職・武器を仕入れる(CHARACTER_ROSTERは表示専用の参照元。既存の所持データ自体は書き換えない)
 function getPfCharacterRef(p) {

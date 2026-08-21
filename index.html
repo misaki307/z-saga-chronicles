@@ -163,6 +163,11 @@
               <button id="btn-open-inheritance" class="retro-btn small-btn">服の継承クエストを開く</button>
             </div>
             <hr>
+            <div class="listing-panel ihq-menu-entry">
+              <p>🌌 神話継承：循環ポイントで解放される限定クエスト</p>
+              <button id="btn-open-mythic-quest" class="retro-btn small-btn">神話継承クエストを開く</button>
+            </div>
+            <hr>
             <h3>【仲間になった魔物＆召喚した魂】</h3>
             <ul id="party-list"></ul>
           </div>
@@ -184,6 +189,7 @@
                   <span class="pf-filter-label">ランク</span>
                   <div class="pf-filter-group" id="pf-rank-filter">
                     <button class="pf-filter-btn active" data-value="ALL">ALL</button>
+                    <button class="pf-filter-btn" data-value="MYTHIC">MYTHIC</button>
                     <button class="pf-filter-btn" data-value="SSS">SSS</button>
                     <button class="pf-filter-btn" data-value="SS">SS</button>
                     <button class="pf-filter-btn" data-value="S">S</button>
@@ -244,6 +250,31 @@
             <h3><img class="ihq-arrival-title-icon" src="assets/ui/inheritance/arrival_door.png" alt="">継承が届きました</h3>
             <div id="ihq-arrival-body"></div>
             <button id="btn-close-inheritance-arrival" class="retro-btn small-btn" style="margin-top:15px;">閉じる</button>
+          </div>
+        </div>
+
+        <!-- 神話継承クエスト(通常ガチャ・SSSとは別枠のMYTHIC3人。服の継承クエストとは独立した専用画面) -->
+        <div id="mythic-quest-screen" class="dialog panel-16bit hidden">
+          <div class="pf-header">
+            <h2 class="pf-title">🌌 神話継承クエスト</h2>
+            <button id="btn-close-mythic-quest" class="retro-btn small-btn">閉じる [Esc]</button>
+          </div>
+          <p class="mythic-quest-intro">循環ポイントが規定値に達すると、本人がボスとして挑戦できるようになります。撃破すると本人が仲間に加わります。ポイントや挑戦権は敗北しても失いません。</p>
+          <div class="mythic-quest-list" id="mythic-quest-content"></div>
+        </div>
+
+        <!-- MYTHIC撃破 → 加入演出 -->
+        <div id="mythic-join-screen" class="dialog panel-16bit hidden">
+          <div class="mythic-join-box">
+            <div class="mythic-join-title">✨ 神話継承 ✨</div>
+            <div class="mythic-join-portrait-frame">
+              <img id="mythic-join-portrait" src="" alt="">
+            </div>
+            <div id="mythic-join-name" class="mythic-join-name"></div>
+            <div id="mythic-join-role" class="mythic-join-role"></div>
+            <p id="mythic-join-message" class="mythic-join-message"></p>
+            <p id="mythic-join-status" class="mythic-join-status"></p>
+            <button id="btn-close-mythic-join" class="retro-btn small-btn">閉じる</button>
           </div>
         </div>
 
