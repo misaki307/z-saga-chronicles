@@ -1407,11 +1407,13 @@ function useAllyUltimate(ally) {
     });
 }
 
-// 召喚結果ポートレートに、キャラごとのbboxを元にした background-size/position を適用する。
-// 画像は一切加工せず、CSSのcustom propertyだけを書き換えて表示上の背丈・足元位置を揃える。
-function applyPortraitCrop(el, characterId) {
-    const bbox = PORTRAIT_BBOX[characterId];
-    if (!el || !bbox) return;
+// 召喚結果ポートレートの表示サイズを決める。画像(256x256透過PNG、周囲のエフェクトを含む)は
+// 一切トリミングせず、常にbackground-size:containで全体をそのまま表示する(CSS側で指定済み)。
+// ここでは正方形の表示枠(width=height)を、.gacha-cardと重ならない範囲でランクに応じて
+// 最大限大きく取るだけで、bboxによるズームや切り取りは行わない。
+const PORTRAIT_RANK_SIZE_RATIO = { C: 0.80, B: 0.86, A: 0.91, S: 0.95, SS: 0.98, SSS: 1.0 };
+function applyPortraitCrop(el, rank) {
+    if (!el) return;
     const stage = el.closest('.summon-portrait-stage');
     const cssTargetH = parseFloat(getComputedStyle(stage || document.documentElement).getPropertyValue('--portrait-target-h')) || 240;
     // キャラは.summon-area内でtop:46%固定・中心配置(CSS側のtransform:translate(-50%,-50%)と対応)。
@@ -1419,26 +1421,21 @@ function applyPortraitCrop(el, characterId) {
     // 大きすぎるとカードと重なる恐れがあるため、実測した高さから重ならない上限だけを計算する。
     const area = el.closest('.summon-area');
     const card = area ? area.querySelector('.gacha-card') : null;
-    let targetH = cssTargetH;
+    const rankRatio = PORTRAIT_RANK_SIZE_RATIO[rank] || 0.85;
+    let boxSize = cssTargetH * rankRatio;
     if (area) {
-        const areaH = area.offsetHeight;
+        const areaW = area.offsetWidth, areaH = area.offsetHeight;
         const centerY = areaH * 0.46;
         const topMargin = 8;
         const cardClearance = card ? (card.offsetHeight + 14) : 8; // カード上端 + 余白
         const halfAvail = Math.min(centerY - topMargin, areaH - cardClearance - centerY);
-        if (halfAvail > 10) targetH = Math.min(cssTargetH, halfAvail * 2);
+        if (halfAvail > 10) boxSize = Math.min(boxSize, halfAvail * 2);
+        boxSize = Math.min(boxSize, areaW * 0.92); // 横幅にも収める(画像は正方形のため)
     }
-    const bboxH = bbox.y1 - bbox.y0;
-    const bboxW = bbox.x1 - bbox.x0;
-    const scale = targetH / bboxH;
-    const elW = bboxW * scale;
-    const bgSize = PORTRAIT_CANVAS_SIZE * scale;
-    el.style.width = `${elW}px`;
-    el.style.height = `${targetH}px`;
-    el.style.setProperty('--bg-w', `${bgSize}px`);
-    el.style.setProperty('--bg-h', `${bgSize}px`);
-    el.style.setProperty('--bg-x', `${-bbox.x0 * scale}px`);
-    el.style.setProperty('--bg-y', `${-bbox.y0 * scale}px`);
+    el.style.width = `${boxSize}px`;
+    el.style.height = `${boxSize}px`;
+    el.style.flex = `0 0 ${boxSize}px`; // ランク別CSS(.gacha-reveal.rank-*)のflex-basisが幅だけ優先されて
+    // 正方形が崩れる(横だけ縮む)ことがあるため、flexプロパティ自体もここで明示的に上書きする。
 }
 
 // 23人分のportrait(256x256透過PNG)を先読みしておく。戦闘画面のcanvas描画(drawImage)で使う。
@@ -3196,8 +3193,11 @@ function openFieldTravel() {
         if (unlocked) {
             const btn = document.createElement('button');
             btn.className = 'retro-btn cmd-btn';
-            btn.textContent = (id === GameState.currentFieldId ? '📍 ' : '▶ ') + field.name;
-            btn.disabled = (id === GameState.currentFieldId);
+            // 広場滞在中は「現在地」ではなく元のフィールドへの経路として扱い、選べるようにする
+            // (currentFieldIdは広場内でも元のフィールドのまま維持されるため、通常時だけ現在地扱いにする)
+            const isHereNow = id === GameState.currentFieldId && !isInLaundryPlaza;
+            btn.textContent = (isHereNow ? '📍 ' : '▶ ') + field.name;
+            btn.disabled = isHereNow;
             btn.addEventListener('click', () => { changeField(id); closeFieldTravel(); });
             li.appendChild(btn);
         } else {
@@ -3404,7 +3404,7 @@ document.getElementById('btn-summon').addEventListener('click', () => {
             // 承認済みportrait本人画像のみ、キャラごとの透明余白差を吸収するサイズ補正をかける
             // (アステアの専用スプライトシート表示や、旧来のsprite-sheet表示は対象外・従来通り)
             if (spriteClass === ' is-portrait-image') {
-                applyPortraitCrop(document.querySelector('.summoned-ally.big'), picked.id);
+                applyPortraitCrop(document.querySelector('.summoned-ally.big'), picked.rank);
             }
         };
 
@@ -3443,7 +3443,7 @@ document.getElementById('btn-summon').addEventListener('click', () => {
             // finishReveal()がshopMsgを最終文言へ書き換えると.summon-areaの実高さが変わることがあるため、
             // 確定後の高さで召喚結果ポートレートのサイズを再計算し、全身が枠外へはみ出さないようにする。
             const finalAlly = document.querySelector('.summoned-ally.big.is-portrait-image');
-            if (finalAlly && picked.portrait) applyPortraitCrop(finalAlly, picked.id);
+            if (finalAlly && picked.portrait) applyPortraitCrop(finalAlly, picked.rank);
         };
 
         // 時環の種子が展開する瞬間を見せてから、レアリティと仲間を表示する

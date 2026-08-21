@@ -186,7 +186,7 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
 
 /* Shop / Gacha */
 /* 召喚結果キャラクターの表示高さの目安。画面幅に応じて自動調整する(画像自体は加工しない)。 */
-:root { --portrait-target-h: 320px; }
+:root { --portrait-target-h: 400px; }
 @media (max-width: 850px) { :root { --portrait-target-h: 190px; } }
 #shop-screen {
   top: 1.5%; bottom: auto; width: 92%; height: 97%; padding: 12px 16px;
@@ -242,12 +242,6 @@ body { background-color: #0b0c10; color: #fff; font-family: 'DotGothic16', monos
   position:absolute; left:50%; top:46%; transform:translate(-50%,-50%);
   max-height:var(--portrait-target-h,196px);
   display:flex; align-items:center; justify-content:center;
-}
-/* 召喚結果ポートレート専用: 画像は加工せず、キャラごとの実絵柄範囲(bbox)に合わせて
-   background-size/positionをJSで計算し、透明余白を吸収して見た目の背丈を揃える。 */
-.summon-portrait-stage .summoned-ally.is-portrait-image {
-  background-size: var(--bg-w) var(--bg-h) !important;
-  background-position: var(--bg-x) var(--bg-y) !important;
 }
 .summoned-ally { width:140px; height:140px; flex:0 0 140px; background-image:var(--ally-sprite); background-size:1200% 400%; background-position:0 0; background-repeat:no-repeat; image-rendering:pixelated; filter:drop-shadow(0 0 10px currentColor); }
 .gacha-reveal.role-mage .summoned-ally { filter:drop-shadow(0 0 11px #ff57d3) drop-shadow(0 0 20px #9d42e8); }
